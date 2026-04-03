@@ -1,0 +1,2 @@
+{"name":"CounterX Web","short_name":"CounterX","start_url":"/","display":"standalone","background_color":"#efe5d4","theme_color":"#171411","description":"Offline contribution ledger for desktop and mobile browsers.","icons":[{"src":"/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}
+
