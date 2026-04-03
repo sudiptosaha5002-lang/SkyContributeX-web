@@ -1,4 +1,4 @@
-﻿import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { InputField } from '../components/InputField';
@@ -72,7 +72,7 @@ export const CreateCardScreen = () => {
         {autoSplit ? (
           <Text style={styles.splitLabel}>Split Amount: {splitAmount}</Text>
         ) : (
-          <InputField label=\"Split Amount\" value={manualSplit} onChangeText={setManualSplit} keyboardType=\"numeric\" />
+          <InputField label="Split Amount" value={manualSplit} onChangeText={setManualSplit} keyboardType="numeric" />
         )}
         <InputField label="Deadline (optional)" value={deadline} onChangeText={setDeadline} placeholder="YYYY-MM-DD" />
         <InputField label="Notes (optional)" value={notes} onChangeText={setNotes} multiline />
@@ -114,3 +114,4 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
 });
+

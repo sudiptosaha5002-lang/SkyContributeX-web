@@ -24,5 +24,21 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["src"]
+  "include": [
+    "src/App.tsx",
+    "src/main.tsx",
+    "src/lib/**/*.ts",
+    "src/types.ts"
+  ],
+  "exclude": [
+    "src/components",
+    "src/context",
+    "src/db",
+    "src/navigation",
+    "src/screens",
+    "src/services",
+    "src/storage",
+    "src/theme",
+    "src/utils"
+  ]
 }

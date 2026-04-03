@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import SignatureCanvas from 'react-signature-canvas'
 import { saveAs } from 'file-saver'
 import { sha256 } from 'js-sha256'
 import clsx from 'clsx'
@@ -14,6 +13,23 @@ type View = 'dashboard' | 'settings' | 'invoices'
 type DeferredInstallPrompt = Event & {
   prompt: () => Promise<void>
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>
+}
+
+type SignaturePadInstance = {
+  clear: () => void
+  isEmpty: () => boolean
+  toDataURL: (type?: string) => string
+  fromDataURL: (dataUrl: string, options?: Record<string, unknown>) => void
+  off: () => void
+  on: () => void
+}
+
+type SignaturePadConstructor = new (canvas: HTMLCanvasElement, options?: Record<string, unknown>) => SignaturePadInstance
+
+declare global {
+  interface Window {
+    SignaturePad?: SignaturePadConstructor
+  }
 }
 
 type CreateCardDraft = {
@@ -419,7 +435,47 @@ function MemberEditor(props: {
   const [recipientEmail, setRecipientEmail] = useState('')
   const [emailStatus, setEmailStatus] = useState('')
   const [emailStatusTone, setEmailStatusTone] = useState<'success' | 'error' | 'idle'>('idle')
-  const signatureRef = useRef<SignatureCanvas | null>(null)
+  const signatureCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const signaturePadRef = useRef<SignaturePadInstance | null>(null)
+
+  function resizeAndRestoreSignature(savedSignature?: string | null) {
+    const canvas = signatureCanvasRef.current
+    const SignaturePad = window.SignaturePad
+    if (!canvas || !SignaturePad) return
+
+    const existingPad = signaturePadRef.current
+    const previousData = savedSignature ?? (existingPad && !existingPad.isEmpty() ? existingPad.toDataURL('image/png') : null)
+    const ratio = Math.max(window.devicePixelRatio || 1, 1)
+    const rect = canvas.getBoundingClientRect()
+    const displayWidth = Math.max(rect.width || 520, 1)
+    const displayHeight = Math.max(rect.height || 220, 1)
+    canvas.width = Math.round(displayWidth * ratio)
+    canvas.height = Math.round(displayHeight * ratio)
+    const context = canvas.getContext('2d')
+    if (context) {
+      context.setTransform(1, 0, 0, 1, 0, 0)
+      context.scale(ratio, ratio)
+    }
+
+    signaturePadRef.current?.off()
+    const pad = new SignaturePad(canvas, {
+      penColor: '#4b2c18',
+      minWidth: 0.8,
+      maxWidth: 2.4,
+      throttle: 0,
+      velocityFilterWeight: 0.25,
+      backgroundColor: 'rgba(255,250,244,1)',
+    })
+    signaturePadRef.current = pad
+
+    if (previousData) {
+      try {
+        pad.fromDataURL(previousData, { ratio, width: displayWidth, height: displayHeight })
+      } catch {
+        // If restore fails, keep the saved preview image instead of blocking the editor.
+      }
+    }
+  }
 
   useEffect(() => {
     const nextDraft = defaultMemberDraft(props.member)
@@ -430,23 +486,26 @@ function MemberEditor(props: {
     setEmailStatusTone('idle')
 
     const timer = window.setTimeout(() => {
-      const pad = signatureRef.current
-      if (!pad) return
-      pad.clear()
-      if (nextDraft.signature) {
-        try {
-          pad.fromDataURL(nextDraft.signature, { ratio: 1, width: 520, height: 220 })
-        } catch {
-          // Keep the preview image even if the pad cannot replay the saved signature.
-        }
-      }
+      resizeAndRestoreSignature(nextDraft.signature ?? null)
     }, 0)
 
-    return () => window.clearTimeout(timer)
+    const handleResize = () => {
+      const fallback = signaturePadRef.current && !signaturePadRef.current.isEmpty()
+        ? signaturePadRef.current.toDataURL('image/png')
+        : nextDraft.signature ?? null
+      resizeAndRestoreSignature(fallback)
+    }
+
+    window.addEventListener('resize', handleResize)
+
+    return () => {
+      window.clearTimeout(timer)
+      window.removeEventListener('resize', handleResize)
+    }
   }, [props.member])
 
   function captureSignature(required = false) {
-    const pad = signatureRef.current
+    const pad = signaturePadRef.current
     if (!pad) {
       if (required) throw new Error('Signature pad is not ready yet.')
       return draft.signature ?? props.member.signature ?? null
@@ -624,11 +683,20 @@ function MemberEditor(props: {
               <div className="signature-header">
                 <h4>Client signature</h4>
                 <button className="ghost-button" type="button" onClick={() => {
-                  signatureRef.current?.clear()
+                  signaturePadRef.current?.clear()
                   setDraft((current) => ({ ...current, signature: null }))
                 }}>Clear pad</button>
               </div>
-              <SignatureCanvas ref={signatureRef} penColor="#4b2c18" minWidth={1.2} onEnd={() => { try { const value = captureSignature(false); if (value) setDraft((current) => ({ ...current, signature: value })) } catch {} }} canvasProps={{ className: 'signature-canvas', width: 520, height: 220 }} backgroundColor="#fffaf4" clearOnResize={false} />
+              <canvas
+                ref={signatureCanvasRef}
+                className="signature-canvas"
+                onPointerUp={() => {
+                  try {
+                    const value = captureSignature(false)
+                    if (value) setDraft((current) => ({ ...current, signature: value }))
+                  } catch {}
+                }}
+              />
               <button className="secondary-button" type="button" onClick={() => {
                 try {
                   const value = captureSignature(true)
