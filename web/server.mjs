@@ -2,7 +2,7 @@ import express from 'express'
 import cors from 'cors'
 import nodemailer from 'nodemailer'
 import dotenv from 'dotenv'
-import { replaceSnapshot, createMagicLink, resolveMagicLink, updateMemberFromMagicLink } from './server-store.mjs'
+import { readStore, replaceSnapshot, createMagicLink, resolveMagicLink, updateMemberFromMagicLink } from './server-store.mjs'
 
 dotenv.config()
 
@@ -50,6 +50,15 @@ app.post('/api/master/sync-snapshot', async (req, res) => {
     res.json({ ok: true })
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Unable to sync snapshot.' })
+  }
+})
+
+app.get('/api/master/snapshot', async (_req, res) => {
+  try {
+    const snapshot = await readStore()
+    res.json({ ok: true, snapshot })
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Unable to load shared snapshot.' })
   }
 })
 
