@@ -22,13 +22,21 @@ export type Member = {
   member_id: string
   product_id: string
   name: string
+  email?: string | null
   amount_due: number
   amount_paid: number
   status: 'PAID' | 'PENDING'
   payment_method: PaymentMethod
   proof?: StoredAsset | null
   signature?: string | null
+  access_link_sent_at?: string | null
   submitted_at: string
+}
+
+export type MemberAccessSession = {
+  profile: MasterProfile | null
+  product: Product | null
+  member: Member
 }
 
 export type MasterProfile = {

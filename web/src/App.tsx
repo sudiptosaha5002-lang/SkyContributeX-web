@@ -6,7 +6,7 @@ import clsx from 'clsx'
 import './index.css'
 import { db, getSetting, setSetting } from './lib/db'
 import { computeStatus, exportBackup, exportCsv, generateInvoice, importBackup, makeId, money, normalizeProof, nowIso } from './lib/utils'
-import type { MasterProfile, Member, PaymentMethod, Product, StoredAsset } from './types'
+import type { MasterProfile, Member, MemberAccessSession, PaymentMethod, Product, StoredAsset } from './types'
 
 type View = 'dashboard' | 'settings' | 'invoices'
 
@@ -44,6 +44,7 @@ type CreateCardDraft = {
 
 type MemberDraft = {
   name: string
+  email: string
   amount_due: string
   amount_paid: string
   payment_method: PaymentMethod
@@ -65,6 +66,7 @@ const defaultCreateDraft = (): CreateCardDraft => ({
 
 const defaultMemberDraft = (member?: Member | null): MemberDraft => ({
   name: member?.name ?? '',
+  email: member?.email ?? '',
   amount_due: String(member?.amount_due ?? ''),
   amount_paid: String(member?.amount_paid ?? ''),
   payment_method: member?.payment_method ?? 'Unspecified',
@@ -108,6 +110,69 @@ async function sendInvoiceEmailRequest(params: {
   if (!response.ok || !result.ok) {
     throw new Error(result.error || 'Unable to send invoice email.')
   }
+}
+
+async function syncSharedSnapshot(params: {
+  profile: MasterProfile | null
+  products: Product[]
+  members: Member[]
+}) {
+  const response = await fetch(`${EMAIL_SERVER_URL}/api/master/sync-snapshot`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  })
+
+  const result = await response.json().catch(() => ({ ok: false, error: 'Unable to sync shared snapshot.' }))
+  if (!response.ok || !result.ok) {
+    throw new Error(result.error || 'Unable to sync shared snapshot.')
+  }
+}
+
+async function sendMemberAccessLinkRequest(params: {
+  memberId: string
+  email: string
+  appBaseUrl: string
+}) {
+  const response = await fetch(`${EMAIL_SERVER_URL}/api/member-access/send-link`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  })
+
+  const result = await response.json().catch(() => ({ ok: false, error: 'Unable to send member access link.' }))
+  if (!response.ok || !result.ok) {
+    throw new Error(result.error || 'Unable to send member access link.')
+  }
+  return result as { ok: true; accessUrl: string }
+}
+
+async function fetchMemberAccessSession(token: string) {
+  const response = await fetch(`${EMAIL_SERVER_URL}/api/member-access/session?token=${encodeURIComponent(token)}`)
+  const result = await response.json().catch(() => ({ ok: false, error: 'Unable to open member access session.' }))
+  if (!response.ok || !result.ok) {
+    throw new Error(result.error || 'Unable to open member access session.')
+  }
+  return result.session as MemberAccessSession
+}
+
+async function updateMemberAccessEntry(params: {
+  token: string
+  amount_paid: number
+  payment_method: PaymentMethod
+  proof?: StoredAsset | null
+  signature?: string | null
+}) {
+  const response = await fetch(`${EMAIL_SERVER_URL}/api/member-access/update`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  })
+  const result = await response.json().catch(() => ({ ok: false, error: 'Unable to update member access entry.' }))
+  if (!response.ok || !result.ok) {
+    throw new Error(result.error || 'Unable to update member access entry.')
+  }
+  return result.session as MemberAccessSession
 }
 
 function shouldProceedOnEnter(target: EventTarget | null) {
@@ -427,10 +492,11 @@ function MemberEditor(props: {
   profile: MasterProfile | null
   onClose: () => void
   onSave: (member: Member, draft: MemberDraft, options?: { closeEditor?: boolean }) => Promise<Member>
+  onSendAccessLink: (member: Member, draft: MemberDraft) => Promise<void>
 }) {
   const [draft, setDraft] = useState<MemberDraft>(defaultMemberDraft(props.member))
   const [error, setError] = useState('')
-  const [busyAction, setBusyAction] = useState<'save' | 'preview' | 'savePdf' | 'share' | null>(null)
+  const [busyAction, setBusyAction] = useState<'save' | 'preview' | 'savePdf' | 'share' | 'accessLink' | null>(null)
   const [emailDialogOpen, setEmailDialogOpen] = useState(false)
   const [recipientEmail, setRecipientEmail] = useState('')
   const [emailStatus, setEmailStatus] = useState('')
@@ -642,6 +708,28 @@ function MemberEditor(props: {
     }
   }
 
+  async function handleSendAccessLink() {
+    setBusyAction('accessLink')
+    setError('')
+    try {
+      const normalizedDraft: MemberDraft = {
+        ...draft,
+        name: draft.name.trim(),
+        email: draft.email.trim(),
+        signature: captureSignature(false),
+      }
+      if (!normalizedDraft.email) {
+        throw new Error('Enter the member email before sending a magic link.')
+      }
+      setDraft(normalizedDraft)
+      await props.onSendAccessLink(props.member, normalizedDraft)
+    } catch (accessError) {
+      setError(accessError instanceof Error ? accessError.message : 'Unable to send member access link.')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
   return (
     <dialog open className="modal-shell">
       <div className="modal-card paper-card large-modal">
@@ -656,6 +744,7 @@ function MemberEditor(props: {
         <div className="member-editor-grid">
           <div className="stack-gap" onKeyDown={(event) => handleProceedOnEnter(event, () => void handleSaveMember())}>
             <Field label="Member name" value={draft.name} onChange={(value) => setDraft((current) => ({ ...current, name: value }))} />
+            <Field label="Member email" value={draft.email} onChange={(value) => setDraft((current) => ({ ...current, email: value }))} type="email" />
             <Field label="Amount due" value={draft.amount_due} onChange={(value) => setDraft((current) => ({ ...current, amount_due: value }))} inputMode="decimal" />
             <Field label="Amount paid" value={draft.amount_paid} onChange={(value) => setDraft((current) => ({ ...current, amount_paid: value }))} inputMode="decimal" />
             <label className="field-shell">
@@ -673,6 +762,7 @@ function MemberEditor(props: {
               <button className="secondary-button" type="button" disabled={busyAction !== null} onClick={() => void handleInvoice('save')}>{busyAction === 'savePdf' ? 'Saving...' : 'Save PDF'}</button>
               <button className="secondary-button" type="button" disabled={busyAction !== null} onClick={() => void handleInvoice('share')}>{busyAction === 'share' ? 'Sharing...' : 'Share'}</button>
             </div>
+            <button className="secondary-button" type="button" disabled={busyAction !== null} onClick={() => void handleSendAccessLink()}>{busyAction === 'accessLink' ? 'Sending link...' : 'Send member access link'}</button>
             {draft.proof ? null : <p className="warning-text">Proof is missing. You can still save the member entry.</p>}
             {error ? <p className="warning-text">{error}</p> : null}
             <button className="primary-button" type="button" disabled={busyAction !== null} onClick={() => void handleSaveMember()}>{busyAction === 'save' ? 'Saving...' : 'Save member payment details'}</button>
@@ -716,6 +806,176 @@ function MemberEditor(props: {
   )
 }
 
+
+function MemberAccessView(props: {
+  token: string
+  session: MemberAccessSession
+  onSessionChange: (session: MemberAccessSession) => void
+}) {
+  const [amountPaid, setAmountPaid] = useState(String(props.session.member.amount_paid ?? ''))
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(props.session.member.payment_method)
+  const [proof, setProof] = useState<StoredAsset | null | undefined>(props.session.member.proof ?? null)
+  const [signature, setSignature] = useState<string | null>(props.session.member.signature ?? null)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  const signatureCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const signaturePadRef = useRef<SignaturePadInstance | null>(null)
+
+  function resizeAndRestoreSignature(savedSignature?: string | null) {
+    const canvas = signatureCanvasRef.current
+    const SignaturePad = window.SignaturePad
+    if (!canvas || !SignaturePad) return
+
+    const existingPad = signaturePadRef.current
+    const previousData = savedSignature ?? (existingPad && !existingPad.isEmpty() ? existingPad.toDataURL('image/png') : null)
+    const ratio = Math.max(window.devicePixelRatio || 1, 1)
+    const rect = canvas.getBoundingClientRect()
+    const displayWidth = Math.max(rect.width || 520, 1)
+    const displayHeight = Math.max(rect.height || 220, 1)
+    canvas.width = Math.round(displayWidth * ratio)
+    canvas.height = Math.round(displayHeight * ratio)
+    const context = canvas.getContext('2d')
+    if (context) {
+      context.setTransform(1, 0, 0, 1, 0, 0)
+      context.scale(ratio, ratio)
+    }
+
+    signaturePadRef.current?.off()
+    const pad = new SignaturePad(canvas, {
+      penColor: '#4b2c18',
+      minWidth: 0.8,
+      maxWidth: 2.4,
+      throttle: 0,
+      velocityFilterWeight: 0.25,
+      backgroundColor: 'rgba(255,250,244,1)',
+    })
+    signaturePadRef.current = pad
+
+    if (previousData) {
+      try {
+        pad.fromDataURL(previousData, { ratio, width: displayWidth, height: displayHeight })
+      } catch {
+        // ignore replay issues and keep the saved preview instead
+      }
+    }
+  }
+
+  useEffect(() => {
+    setAmountPaid(String(props.session.member.amount_paid ?? ''))
+    setPaymentMethod(props.session.member.payment_method)
+    setProof(props.session.member.proof ?? null)
+    setSignature(props.session.member.signature ?? null)
+    const timer = window.setTimeout(() => resizeAndRestoreSignature(props.session.member.signature ?? null), 0)
+    const handleResize = () => resizeAndRestoreSignature(signature)
+    window.addEventListener('resize', handleResize)
+    return () => {
+      window.clearTimeout(timer)
+      window.removeEventListener('resize', handleResize)
+    }
+  }, [props.session])
+
+  function captureSignature(required = false) {
+    const pad = signaturePadRef.current
+    if (!pad) {
+      if (required) throw new Error('Signature pad is not ready yet.')
+      return signature ?? props.session.member.signature ?? null
+    }
+    if (pad.isEmpty()) {
+      if (required && !signature && !props.session.member.signature) {
+        throw new Error('Please draw a signature first.')
+      }
+      return signature ?? props.session.member.signature ?? null
+    }
+    return pad.toDataURL('image/png')
+  }
+
+  async function handleProofUpload(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    if (!file) return
+    try {
+      const normalized = await normalizeProof(file)
+      setProof(normalized)
+      setMessage('Proof uploaded successfully.')
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Unable to upload proof.')
+    }
+  }
+
+  async function handleSave() {
+    setBusy(true)
+    setMessage('')
+    try {
+      const nextSession = await updateMemberAccessEntry({
+        token: props.token,
+        amount_paid: Number(amountPaid),
+        payment_method: paymentMethod,
+        proof: proof ?? null,
+        signature: captureSignature(false),
+      })
+      props.onSessionChange(nextSession)
+      setSignature(nextSession.member.signature ?? null)
+      setMessage('Your payment entry has been updated.')
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Unable to update your payment entry.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="auth-shell member-access-shell">
+      <section className="auth-lock-wrap member-access-wrap paper-card">
+        <div className="auth-brand-badge">Open</div>
+        <h1>{props.session.product?.title ?? 'Member access'}</h1>
+        <p className="auth-subtitle">Update only your own contribution entry using this secure magic link.</p>
+
+        <div className="member-access-summary paper-card">
+          <div><span className="eyebrow">Member</span><strong>{props.session.member.name}</strong></div>
+          <div><span className="eyebrow">Email</span><strong>{props.session.member.email || 'Not set'}</strong></div>
+          <div><span className="eyebrow">Amount due</span><strong>{money(props.session.member.amount_due)}</strong></div>
+        </div>
+
+        <div className="auth-setup-grid member-access-grid" onKeyDown={(event) => handleProceedOnEnter(event, () => void handleSave())}>
+          <Field label="Amount paid" value={amountPaid} onChange={setAmountPaid} inputMode="decimal" />
+          <label className="field-shell">
+            <span>Payment method</span>
+            <select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value as PaymentMethod)}>
+              {PAYMENT_METHODS.map((method) => <option key={method} value={method}>{method}</option>)}
+            </select>
+          </label>
+          <label className="upload-box member-access-upload">
+            <span>{proof ? `Proof ready: ${proof.name}` : 'Upload payment proof (JPG, PNG, PDF)'}</span>
+            <input type="file" accept="image/jpeg,image/png,application/pdf" capture="environment" onChange={(event) => void handleProofUpload(event)} />
+          </label>
+        </div>
+
+        <div className="signature-shell member-access-signature-shell">
+          <div className="signature-header">
+            <h4>Client signature</h4>
+            <button className="ghost-button" type="button" onClick={() => {
+              signaturePadRef.current?.clear()
+              setSignature(null)
+            }}>Clear pad</button>
+          </div>
+          <canvas
+            ref={signatureCanvasRef}
+            className="signature-canvas"
+            onPointerUp={() => {
+              try {
+                const value = captureSignature(false)
+                if (value) setSignature(value)
+              } catch {}
+            }}
+          />
+        </div>
+        {signature ? <img className="signature-preview" src={signature} alt="Signature preview" /> : null}
+        {message ? <p className="warning-text">{message}</p> : null}
+        <button className="primary-button auth-unlock-button" type="button" disabled={busy} onClick={() => void handleSave()}>{busy ? 'Saving...' : 'Save my payment entry'}</button>
+      </section>
+    </div>
+  )
+}
+
 function App() {
   const [hasPin, setHasPin] = useState(false)
   const [isUnlocked, setUnlocked] = useState(false)
@@ -740,6 +1000,10 @@ function App() {
   const [emailStatus, setEmailStatus] = useState('')
   const [emailStatusTone, setEmailStatusTone] = useState<'success' | 'error' | 'idle'>('idle')
   const [emailTargetMember, setEmailTargetMember] = useState<Member | null>(null)
+  const [memberAccessToken] = useState(() => new URLSearchParams(window.location.search).get('member_access_token') ?? '')
+  const [memberAccessSession, setMemberAccessSession] = useState<MemberAccessSession | null>(null)
+  const [memberAccessLoading, setMemberAccessLoading] = useState(false)
+  const [memberAccessError, setMemberAccessError] = useState('')
 
   const products = useLiveQuery(async () => db.products.orderBy('created_at').reverse().toArray(), [], [])
   const overallMembers = useLiveQuery(async () => db.members.toArray(), [], [])
@@ -765,6 +1029,16 @@ function App() {
     const timer = window.setTimeout(() => setMessage(''), 2800)
     return () => window.clearTimeout(timer)
   }, [message])
+
+  useEffect(() => {
+    if (!memberAccessToken) return
+    setMemberAccessLoading(true)
+    setMemberAccessError('')
+    void fetchMemberAccessSession(memberAccessToken)
+      .then((session) => setMemberAccessSession(session))
+      .catch((error) => setMemberAccessError(error instanceof Error ? error.message : 'Unable to open member access session.'))
+      .finally(() => setMemberAccessLoading(false))
+  }, [memberAccessToken])
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(display-mode: standalone)')
@@ -849,11 +1123,13 @@ function App() {
       product_id: product.product_id,
       name: `Member ${index + 1}`,
       amount_due: product.split_amount,
+      email: null,
       amount_paid: 0,
       payment_method: 'Unspecified',
       status: 'PENDING',
       proof: null,
       signature: null,
+      access_link_sent_at: null,
       submitted_at: nowIso(),
     }))
     await db.transaction('rw', db.products, db.members, async () => {
@@ -863,6 +1139,7 @@ function App() {
     setCreateDraft(defaultCreateDraft())
     setSelectedProductId(product.product_id)
     setShowCreateCard(false)
+    await syncSnapshotFromLocalDb().catch(() => undefined)
     setMessage('Contribution card created.')
   }
 
@@ -924,6 +1201,24 @@ function App() {
     }
   }
 
+  async function syncSnapshotFromLocalDb() {
+    const [productsSnapshot, membersSnapshot] = await Promise.all([db.products.toArray(), db.members.toArray()])
+    await syncSharedSnapshot({ profile, products: productsSnapshot, members: membersSnapshot })
+  }
+
+  async function sendMemberAccessLink(member: Member, draft: MemberDraft) {
+    const savedMember = await saveMember(member, draft, { closeEditor: false })
+    await syncSnapshotFromLocalDb()
+    const appBaseUrl = window.location.origin
+    await sendMemberAccessLinkRequest({
+      memberId: savedMember.member_id,
+      email: savedMember.email ?? draft.email.trim(),
+      appBaseUrl,
+    })
+    await db.members.put({ ...savedMember, access_link_sent_at: nowIso() })
+    setMessage(`Member access link sent to ${savedMember.email}.`)
+  }
+
   async function handleInstallApp() {
     const ua = window.navigator.userAgent.toLowerCase()
     const isIos = /iphone|ipad|ipod/.test(ua)
@@ -967,6 +1262,7 @@ function App() {
     const updated: Member = {
       ...member,
       name: draft.name.trim(),
+      email: draft.email.trim() || null,
       amount_due: amountDue,
       amount_paid: amountPaid,
       payment_method: draft.payment_method,
@@ -976,6 +1272,7 @@ function App() {
       status: computeStatus(amountPaid, amountDue),
     }
     await db.members.put(updated)
+    await syncSnapshotFromLocalDb().catch(() => undefined)
     if (options?.closeEditor ?? true) {
       setEditingMember(null)
       setMessage('Member payment details saved.')
@@ -985,6 +1282,18 @@ function App() {
 
   const mobileTitle = view === 'dashboard' ? (selectedProduct ? selectedProduct.title : 'Contribution ledger') : view === 'invoices' ? (selectedProduct ? selectedProduct.title + ' invoices' : 'Invoices') : 'Settings'
   const mobileSubtitle = view === 'dashboard' ? (selectedProduct ? 'Manage product card' : 'Master workspace') : view === 'invoices' ? 'Invoice dashboard' : 'Profile and backup'
+
+  if (memberAccessToken) {
+    if (memberAccessLoading) {
+      return <div className="auth-shell member-access-shell"><section className="auth-lock-wrap member-access-wrap paper-card"><div className="auth-brand-badge">Open</div><h1>Opening member access</h1><p className="auth-subtitle">Please wait while we verify your secure link.</p></section></div>
+    }
+
+    if (memberAccessError || !memberAccessSession) {
+      return <div className="auth-shell member-access-shell"><section className="auth-lock-wrap member-access-wrap paper-card"><div className="auth-brand-badge">Error</div><h1>Link unavailable</h1><p className="auth-subtitle">{memberAccessError || 'This member access link is invalid or expired.'}</p></section></div>
+    }
+
+    return <MemberAccessView token={memberAccessToken} session={memberAccessSession} onSessionChange={setMemberAccessSession} />
+  }
 
   if (!hasPin) {
     return <AuthShell title="ContriTrack" subtitle="Set your PIN to secure the workspace" pinValue={setupPin} onPinChange={setSetupPin} onSubmit={() => void handleSetup()} buttonLabel="Finish Setup" message={message}><div className="auth-setup-grid"><Field label="Confirm PIN" value={confirmPin} onChange={setConfirmPin} type="password" inputMode="numeric" /><Field label="Master name" value={setupName} onChange={setSetupName} /><Field label="Email" value={setupEmail} onChange={setSetupEmail} type="email" /><Field label="Phone (optional)" value={setupPhone} onChange={setSetupPhone} /></div></AuthShell>
@@ -1004,7 +1313,7 @@ function App() {
       </main>
       <nav className="mobile-bottom-nav paper-card"><button className={clsx('mobile-nav-button', view === 'dashboard' && 'mobile-nav-button-active')} onClick={() => setView('dashboard')}>Home</button><button className={clsx('mobile-nav-button', view === 'invoices' && 'mobile-nav-button-active')} onClick={() => { if (selectedProduct) setView('invoices') }} disabled={!selectedProduct}>Invoices</button><button className={clsx('mobile-nav-button', view === 'settings' && 'mobile-nav-button-active')} onClick={() => setView('settings')}>Settings</button></nav>
       {showCreateCard ? <dialog open className="modal-shell"><div className="modal-card paper-card create-card-modal"><div className="modal-header"><div><p className="eyebrow">New card</p><h3>Create a contribution card</h3></div><button className="ghost-button" onClick={() => setShowCreateCard(false)}>Close</button></div><div className="form-grid create-card-form" onKeyDown={(event) => handleProceedOnEnter(event, () => void createCard())}><Field label="Product name" value={createDraft.title} onChange={(value) => setCreateDraft((draft) => ({ ...draft, title: value }))} /><Field label="Total amount" value={createDraft.totalAmount} onChange={(value) => setCreateDraft((draft) => ({ ...draft, totalAmount: value }))} inputMode="decimal" /><label className="range-field"><span>Members count: {createDraft.membersCount}</span><input type="range" min="1" max="150" value={createDraft.membersCount} onChange={(event) => setCreateDraft((draft) => ({ ...draft, membersCount: Number(event.target.value) }))} /></label><label className="toggle-row"><span>Auto split</span><input type="checkbox" checked={createDraft.autoSplit} onChange={(event) => setCreateDraft((draft) => ({ ...draft, autoSplit: event.target.checked }))} /></label>{createDraft.autoSplit ? <div className="field-shell read-only-field"><span>Split amount</span><strong>{money(splitAmountPreview)}</strong></div> : <Field label="Split amount" value={createDraft.manualSplit} onChange={(value) => setCreateDraft((draft) => ({ ...draft, manualSplit: value }))} inputMode="decimal" />}<Field label="Deadline" value={createDraft.deadline} onChange={(value) => setCreateDraft((draft) => ({ ...draft, deadline: value }))} type="date" /><Field label="Notes" value={createDraft.notes} onChange={(value) => setCreateDraft((draft) => ({ ...draft, notes: value }))} multiline /></div><div className="modal-footer create-card-footer"><button className="primary-button create-card-submit" onClick={() => void createCard()}>Create card</button></div></div></dialog> : null}
-      {editingMember ? <MemberEditor member={editingMember} product={selectedProduct ?? null} profile={profile} onClose={() => setEditingMember(null)} onSave={saveMember} /> : null}
+      {editingMember ? <MemberEditor member={editingMember} product={selectedProduct ?? null} profile={profile} onClose={() => setEditingMember(null)} onSave={saveMember} onSendAccessLink={sendMemberAccessLink} /> : null}
       <EmailSendDialog open={emailDialogOpen} title={emailTargetMember ? `Send invoice to ${emailTargetMember.name}` : 'Send invoice'} recipientEmail={emailRecipient} onRecipientEmailChange={setEmailRecipient} onClose={() => { setEmailDialogOpen(false); setEmailTargetMember(null); setEmailStatus(''); setEmailStatusTone('idle') }} onSend={() => void handleSendDashboardEmail()} isSending={emailStatus === 'Sending invoice email...'} statusMessage={emailStatus} statusTone={emailStatusTone} />
       {message ? <div className="toast">{message}</div> : null}
     </div>
