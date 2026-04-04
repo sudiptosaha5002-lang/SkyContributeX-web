@@ -2,7 +2,7 @@ import express from 'express'
 import cors from 'cors'
 import nodemailer from 'nodemailer'
 import dotenv from 'dotenv'
-import { readStore, replaceSnapshot, createMagicLink, resolveMagicLink, updateMemberFromMagicLink } from './server-store.mjs'
+import { readStore, replaceSnapshot, createMagicLink, resolveMagicLink, updateMemberFromMagicLink, searchPublicProducts, createPublicMemberSession } from './server-store.mjs'
 
 dotenv.config()
 

@@ -52,6 +52,14 @@ type MemberDraft = {
   signature?: string | null
 }
 
+type PublicAccessProduct = {
+  product_id: string
+  title: string
+  description: string
+  members_count: number
+  created_at: string
+}
+
 const PAYMENT_METHODS: PaymentMethod[] = ['Cash', 'UPI', 'PayPal', 'Unspecified']
 
 const defaultCreateDraft = (): CreateCardDraft => ({
@@ -182,6 +190,28 @@ async function fetchSharedSnapshot() {
     throw new Error(result.error || 'Unable to load shared snapshot.')
   }
   return result.snapshot as { profile: MasterProfile | null; products: Product[]; members: Member[] }
+}
+
+async function searchPublicMemberProducts(query: string) {
+  const response = await fetch(`${EMAIL_SERVER_URL}/api/member-access/public-search?q=${encodeURIComponent(query)}`)
+  const result = await response.json().catch(() => ({ ok: false, error: 'Unable to search cards.' }))
+  if (!response.ok || !result.ok) {
+    throw new Error(result.error || 'Unable to search cards.')
+  }
+  return (result.products ?? []) as PublicAccessProduct[]
+}
+
+async function verifyPublicMemberAccess(params: { productId: string; email: string }) {
+  const response = await fetch(`${EMAIL_SERVER_URL}/api/member-access/public-verify`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  })
+  const result = await response.json().catch(() => ({ ok: false, error: 'Unable to verify member access.' }))
+  if (!response.ok || !result.ok) {
+    throw new Error(result.error || 'Unable to verify member access.')
+  }
+  return result as { ok: true; token: string; session: MemberAccessSession }
 }
 
 function shouldProceedOnEnter(target: EventTarget | null) {
@@ -911,6 +941,118 @@ function MemberEditor(props: {
 }
 
 
+function PublicMemberAccessLookup(props: {
+  onOpenSession: (token: string, session: MemberAccessSession) => void
+  onClose: () => void
+}) {
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<PublicAccessProduct[]>([])
+  const [selectedProduct, setSelectedProduct] = useState<PublicAccessProduct | null>(null)
+  const [email, setEmail] = useState('')
+  const [message, setMessage] = useState('')
+  const [isSearching, setIsSearching] = useState(false)
+  const [isVerifying, setIsVerifying] = useState(false)
+
+  async function handleSearch() {
+    const trimmed = query.trim()
+    if (trimmed.length < 2) {
+      setMessage('Enter at least 2 characters of the product name or product card ID.')
+      setResults([])
+      return
+    }
+
+    setIsSearching(true)
+    setMessage('')
+    setSelectedProduct(null)
+    try {
+      const nextResults = await searchPublicMemberProducts(trimmed)
+      setResults(nextResults)
+      if (nextResults.length === 0) {
+        setMessage('No product card matched that name or card ID.')
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Unable to search cards.')
+    } finally {
+      setIsSearching(false)
+    }
+  }
+
+  async function handleVerify() {
+    if (!selectedProduct) {
+      setMessage('Select a product card first.')
+      return
+    }
+
+    const trimmedEmail = email.trim()
+    if (!trimmedEmail) {
+      setMessage('Enter your saved member email to continue.')
+      return
+    }
+
+    setIsVerifying(true)
+    setMessage('')
+    try {
+      const result = await verifyPublicMemberAccess({
+        productId: selectedProduct.product_id,
+        email: trimmedEmail,
+      })
+      props.onOpenSession(result.token, result.session)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Unable to verify member access.')
+    } finally {
+      setIsVerifying(false)
+    }
+  }
+
+  return (
+    <div className="auth-shell member-access-shell">
+      <section className="auth-lock-wrap member-access-wrap paper-card public-access-shell">
+        <div className="member-access-head-row">
+          <div>
+            <div className="auth-brand-badge">Member Access</div>
+            <h1>Find your contribution card</h1>
+            <p className="auth-subtitle">Search by product card name or product card ID, then verify with your saved member email.</p>
+          </div>
+          <button className="ghost-button" type="button" onClick={props.onClose}>Back</button>
+        </div>
+
+        <div className="auth-setup-grid member-access-grid public-access-grid" onKeyDown={(event) => handleProceedOnEnter(event, () => void (selectedProduct ? handleVerify() : handleSearch()))}>
+          <Field label="Product name or card ID" value={query} onChange={setQuery} />
+          <button className="primary-button" type="button" disabled={isSearching} onClick={() => void handleSearch()}>{isSearching ? 'Searching...' : 'Search card'}</button>
+        </div>
+
+        <div className="public-access-results">
+          {results.map((product) => (
+            <article key={product.product_id} className={clsx('paper-card public-access-card', selectedProduct?.product_id === product.product_id && 'public-access-card-active')}>
+              <div>
+                <p className="eyebrow">Product Card</p>
+                <h3>{product.title}</h3>
+                <p>{product.description || 'No notes yet.'}</p>
+                <span className="public-access-meta">ID: {product.product_id} | Members: {product.members_count}</span>
+              </div>
+              <button className="secondary-button" type="button" onClick={() => { setSelectedProduct(product); setMessage(''); }}>{selectedProduct?.product_id === product.product_id ? 'Selected' : 'Choose'}</button>
+            </article>
+          ))}
+        </div>
+
+        {selectedProduct ? (
+          <div className="paper-card public-access-verify">
+            <p className="eyebrow">Verify Member</p>
+            <h3>{selectedProduct.title}</h3>
+            <p>Enter the exact email saved on your member entry to open only your own payment form.</p>
+            <div className="auth-setup-grid member-access-grid public-access-grid" onKeyDown={(event) => handleProceedOnEnter(event, () => void handleVerify())}>
+              <Field label="Member email" value={email} onChange={setEmail} type="email" />
+              <button className="primary-button" type="button" disabled={isVerifying} onClick={() => void handleVerify()}>{isVerifying ? 'Opening...' : 'Open my member entry'}</button>
+            </div>
+          </div>
+        ) : null}
+
+        {message ? <p className="warning-text">{message}</p> : null}
+      </section>
+    </div>
+  )
+}
+
 function MemberAccessView(props: {
   token: string
   session: MemberAccessSession
@@ -1107,7 +1249,9 @@ function App() {
   const [emailTargetProduct, setEmailTargetProduct] = useState<Product | null>(null)
   const [isPullingRemote, setIsPullingRemote] = useState(false)
   const [isDeletingCard, setIsDeletingCard] = useState(false)
-  const [memberAccessToken] = useState(() => new URLSearchParams(window.location.search).get('member_access_token') ?? '')
+  const [memberAccessTokenFromQuery] = useState(() => new URLSearchParams(window.location.search).get('member_access_token') ?? '')
+  const [memberAccessTokenState, setMemberAccessTokenState] = useState('')
+  const [memberPortalOpen, setMemberPortalOpen] = useState(false)
   const [memberAccessSession, setMemberAccessSession] = useState<MemberAccessSession | null>(null)
   const [memberAccessLoading, setMemberAccessLoading] = useState(false)
   const [memberAccessError, setMemberAccessError] = useState('')
@@ -1138,14 +1282,14 @@ function App() {
   }, [message])
 
   useEffect(() => {
-    if (!memberAccessToken) return
+    if (!memberAccessTokenFromQuery) return
     setMemberAccessLoading(true)
     setMemberAccessError('')
-    void fetchMemberAccessSession(memberAccessToken)
+    void fetchMemberAccessSession(memberAccessTokenFromQuery)
       .then((session) => setMemberAccessSession(session))
       .catch((error) => setMemberAccessError(error instanceof Error ? error.message : 'Unable to open member access session.'))
       .finally(() => setMemberAccessLoading(false))
-  }, [memberAccessToken])
+  }, [memberAccessTokenFromQuery])
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(display-mode: standalone)')
@@ -1479,7 +1623,9 @@ function App() {
   const mobileTitle = view === 'dashboard' ? (selectedProduct ? selectedProduct.title : 'Contribution ledger') : view === 'invoices' ? (selectedProduct ? selectedProduct.title + ' invoices' : 'Invoices') : view === 'invoice_records' ? 'Invoice records' : 'Settings'
   const mobileSubtitle = view === 'dashboard' ? (selectedProduct ? 'Manage product card' : 'Master workspace') : view === 'invoices' ? 'Invoice dashboard' : view === 'invoice_records' ? 'All payer records' : 'Profile and backup'
 
-  if (memberAccessToken) {
+  const activeMemberAccessToken = memberAccessTokenState || memberAccessTokenFromQuery
+
+  if (activeMemberAccessToken) {
     if (memberAccessLoading) {
       return <div className="auth-shell member-access-shell"><section className="auth-lock-wrap member-access-wrap paper-card"><div className="auth-brand-badge">Open</div><h1>Opening member access</h1><p className="auth-subtitle">Please wait while we verify your secure link.</p></section></div>
     }
@@ -1488,7 +1634,11 @@ function App() {
       return <div className="auth-shell member-access-shell"><section className="auth-lock-wrap member-access-wrap paper-card"><div className="auth-brand-badge">Error</div><h1>Link unavailable</h1><p className="auth-subtitle">{memberAccessError || 'This member access link is invalid or expired.'}</p></section></div>
     }
 
-    return <MemberAccessView token={memberAccessToken} session={memberAccessSession} onSessionChange={setMemberAccessSession} />
+    return <MemberAccessView token={activeMemberAccessToken} session={memberAccessSession} onSessionChange={setMemberAccessSession} />
+  }
+
+  if (memberPortalOpen) {
+    return <PublicMemberAccessLookup onOpenSession={(token, session) => { setMemberAccessTokenState(token); setMemberAccessSession(session); setMemberPortalOpen(false); setMemberAccessError(''); setMemberAccessLoading(false) }} onClose={() => { setMemberPortalOpen(false); setMemberAccessSession(null); setMemberAccessTokenState('') }} />
   }
 
   if (!hasPin) {
@@ -1496,7 +1646,7 @@ function App() {
   }
 
   if (!isUnlocked) {
-    return <AuthShell title="ContriTrack" subtitle="Enter PIN to unlock" pinValue={pin} onPinChange={setPin} onSubmit={() => void handleUnlock()} buttonLabel="Unlock" message={message} />
+    return <AuthShell title="ContriTrack" subtitle="Enter PIN to unlock" pinValue={pin} onPinChange={setPin} onSubmit={() => void handleUnlock()} buttonLabel="Unlock" message={message}><button className="ghost-button auth-secondary-button" type="button" onClick={() => { setMemberPortalOpen(true); setMessage('') }}>Member access</button></AuthShell>
   }
 
   return (
@@ -1517,6 +1667,7 @@ function App() {
 }
 
 export default App
+
 
 
 

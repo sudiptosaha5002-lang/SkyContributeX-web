@@ -152,3 +152,55 @@ export async function updateMemberFromMagicLink(rawToken, updates) {
     member,
   }
 }
+
+export async function searchPublicProducts(query) {
+  const store = await readStore()
+  const normalized = String(query || '').trim().toLowerCase()
+  if (!normalized) {
+    return []
+  }
+
+  return store.products
+    .filter((product) => product.title.toLowerCase().includes(normalized) || product.product_id.toLowerCase().includes(normalized))
+    .slice(0, 24)
+    .map((product) => ({
+      product_id: product.product_id,
+      title: product.title,
+      description: product.description,
+      members_count: product.members_count,
+      created_at: product.created_at,
+    }))
+}
+
+export async function createPublicMemberSession(productId, email, expiryMs = 1000 * 60 * 60 * 24 * 3) {
+  const store = await readStore()
+  const normalizedProductId = String(productId || '').trim()
+  const normalizedEmail = String(email || '').trim().toLowerCase()
+
+  if (!normalizedProductId || !normalizedEmail) {
+    throw new Error('Product ID and member email are required.')
+  }
+
+  const product = store.products.find((entry) => entry.product_id === normalizedProductId)
+  if (!product) {
+    throw new Error('Product card was not found.')
+  }
+
+  const matchingMembers = store.members.filter((entry) => entry.product_id === normalizedProductId && String(entry.email || '').trim().toLowerCase() === normalizedEmail)
+
+  if (matchingMembers.length === 0) {
+    throw new Error('No member matched that email for this card.')
+  }
+
+  if (matchingMembers.length > 1) {
+    throw new Error('Multiple members matched this email. Please use a unique member email.')
+  }
+
+  const rawToken = await createMagicLink(matchingMembers[0].member_id, normalizedEmail, expiryMs)
+  const session = await resolveMagicLink(rawToken)
+  if (!session) {
+    throw new Error('Unable to open the member session right now.')
+  }
+
+  return { token: rawToken, session }
+}
