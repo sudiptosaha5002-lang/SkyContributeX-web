@@ -1057,6 +1057,7 @@ function MemberAccessView(props: {
   token: string
   session: MemberAccessSession
   onSessionChange: (session: MemberAccessSession) => void
+  onLogout: () => void
 }) {
   const [amountPaid, setAmountPaid] = useState(String(props.session.member.amount_paid ?? ''))
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(props.session.member.payment_method)
@@ -1171,7 +1172,10 @@ function MemberAccessView(props: {
   return (
     <div className="auth-shell member-access-shell">
       <section className="auth-lock-wrap member-access-wrap paper-card">
-        <div className="auth-brand-badge">Open</div>
+        <div className="member-access-head-row">
+          <div className="auth-brand-badge">Open</div>
+          <button className="ghost-button" type="button" onClick={props.onLogout}>Logout</button>
+        </div>
         <h1>{props.session.product?.title ?? 'Member access'}</h1>
         <p className="auth-subtitle">Update only your own contribution entry using this secure magic link.</p>
 
@@ -1551,6 +1555,32 @@ function App() {
     setMessage('Use your browser menu and choose Install app or Add to Home screen.')
   }
 
+  function handleLogout() {
+    setUnlocked(false)
+    setPin('')
+    setSelectedProductId(null)
+    setView('dashboard')
+    setEditingMember(null)
+    setShowCreateCard(false)
+    setEmailDialogOpen(false)
+    setEmailTargetMember(null)
+    setEmailTargetProduct(null)
+    setMessage('Logged out.')
+  }
+
+  function handleMemberAccessLogout() {
+    setMemberAccessSession(null)
+    setMemberAccessError('')
+    setMemberAccessLoading(false)
+    setMemberAccessTokenState('')
+    setMemberPortalOpen(false)
+    if (memberAccessTokenFromQuery) {
+      window.location.href = window.location.pathname
+      return
+    }
+    setMessage('Logged out.')
+  }
+
   async function deleteCardById(productId: string, productTitle: string) {
     const shouldDelete = window.confirm(`Delete "${productTitle}" and all its member entries? This cannot be undone.`)
     if (!shouldDelete) return
@@ -1634,7 +1664,7 @@ function App() {
       return <div className="auth-shell member-access-shell"><section className="auth-lock-wrap member-access-wrap paper-card"><div className="auth-brand-badge">Error</div><h1>Link unavailable</h1><p className="auth-subtitle">{memberAccessError || 'This member access link is invalid or expired.'}</p></section></div>
     }
 
-    return <MemberAccessView token={activeMemberAccessToken} session={memberAccessSession} onSessionChange={setMemberAccessSession} />
+    return <MemberAccessView token={activeMemberAccessToken} session={memberAccessSession} onSessionChange={setMemberAccessSession} onLogout={handleMemberAccessLogout} />
   }
 
   if (memberPortalOpen) {
@@ -1651,8 +1681,8 @@ function App() {
 
   return (
     <div className={clsx('shell', selectedProduct && view === 'dashboard' && 'shell-product-open')}>
-      <aside className="sidebar paper-card"><div><p className="eyebrow">CounterX</p><h1>Contribution ledger</h1><p className="subtle">Offline-ready for desktop and mobile browsers.</p></div><div className="profile-chip"><strong>{profile?.name ?? 'Master User'}</strong><span>{profile?.email ?? ''}</span></div><nav className="nav-stack"><button className={clsx('nav-button', view === 'dashboard' && 'nav-button-active')} onClick={() => setView('dashboard')}>Dashboard</button><button className={clsx('nav-button', view === 'invoice_records' && 'nav-button-active')} onClick={() => setView('invoice_records')}>Invoice Records</button><button className={clsx('nav-button', view === 'settings' && 'nav-button-active')} onClick={() => setView('settings')}>Settings</button><button className="nav-button" onClick={() => void handleInstallApp()}>{isStandaloneMode ? 'Installed' : 'Install'}</button><button className="nav-button" onClick={() => setUnlocked(false)}>Lock</button></nav></aside>
-      <header className="mobile-app-bar paper-card"><div className="mobile-app-bar-copy"><p className="eyebrow">{mobileSubtitle}</p><h2>{mobileTitle}</h2></div><div className="mobile-header-actions"><button className="ghost-button" onClick={() => void handleInstallApp()}>{isStandaloneMode ? 'Installed' : 'Install'}</button><button className="ghost-button mobile-lock-button" onClick={() => setUnlocked(false)}>Lock</button></div></header>
+      <aside className="sidebar paper-card"><div><p className="eyebrow">CounterX</p><h1>Contribution ledger</h1><p className="subtle">Offline-ready for desktop and mobile browsers.</p></div><div className="profile-chip"><strong>{profile?.name ?? 'Master User'}</strong><span>{profile?.email ?? ''}</span></div><nav className="nav-stack"><button className={clsx('nav-button', view === 'dashboard' && 'nav-button-active')} onClick={() => setView('dashboard')}>Dashboard</button><button className={clsx('nav-button', view === 'invoice_records' && 'nav-button-active')} onClick={() => setView('invoice_records')}>Invoice Records</button><button className={clsx('nav-button', view === 'settings' && 'nav-button-active')} onClick={() => setView('settings')}>Settings</button><button className="nav-button" onClick={() => void handleInstallApp()}>{isStandaloneMode ? 'Installed' : 'Install'}</button><button className="nav-button" onClick={handleLogout}>Logout</button></nav></aside>
+      <header className="mobile-app-bar paper-card"><div className="mobile-app-bar-copy"><p className="eyebrow">{mobileSubtitle}</p><h2>{mobileTitle}</h2></div><div className="mobile-header-actions"><button className="ghost-button" onClick={() => void handleInstallApp()}>{isStandaloneMode ? 'Installed' : 'Install'}</button><button className="ghost-button mobile-lock-button" onClick={handleLogout}>Logout</button></div></header>
       <main className="content">
         <header className="hero-card paper-card"><div><p className="eyebrow">Master workspace</p><h2>{view === 'dashboard' ? 'Track products, payments, proofs, signatures, and exports' : 'Control backup, restore, and master details'}</h2></div><div className="stat-row"><Stat label="Cards" value={String(stats.totalCards)} /><Stat label="Active" value={String(stats.activeCards)} /><Stat label="Completed" value={String(stats.completedCards)} /></div></header>
         {view === 'dashboard' ? (<><section className="toolbar paper-card"><div className="toolbar-main"><label className="search-field"><span>Search cards</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="search the card" /></label><div className="button-cluster toolbar-actions"><button className="secondary-button" disabled={isPullingRemote} onClick={() => void pullRemoteUpdates()}>{isPullingRemote ? 'Syncing...' : 'Pull remote updates'}</button><button className="primary-button" onClick={() => setShowCreateCard(true)}>Create new card</button></div></div></section><section className="grid-layout"><div className="stack-gap">{filteredProducts.map((product) => { const productMembers = overallMembers.filter((member) => member.product_id === product.product_id); const paidMembers = productMembers.filter((member) => member.status === 'PAID').length; const collected = productMembers.reduce((total, member) => total + member.amount_paid, 0); const progress = productMembers.length ? (paidMembers / productMembers.length) * 100 : 0; return <article key={product.product_id} className={clsx('ledger-card', 'paper-card', selectedProductId === product.product_id && 'ledger-card-active')}><div className="ledger-header"><div><h3>{product.title}</h3><p>{product.description || 'No notes yet.'}</p></div><div className="button-cluster ledger-card-actions"><button className="secondary-button" onClick={() => { setSelectedProductId(product.product_id); setView('dashboard') }}>Open</button><button className="secondary-button card-inline-delete-button" disabled={isDeletingCard} onClick={() => void deleteCardById(product.product_id, product.title)}>{isDeletingCard ? 'Deleting...' : 'Delete'}</button></div></div><div className="mini-stats"><span>Total: {money(product.total_amount)}</span><span>Members: {product.members_count}</span><span>Collected: {money(collected)}</span></div><div className="progress-track"><div className="progress-bar" style={{ width: `${progress}%` }} /></div></article>})}{filteredProducts.length === 0 ? <article className="paper-card empty-state">No contribution cards yet. Create one to get started.</article> : null}</div><section className="details-panel paper-card">{selectedProduct ? <ProductDetails product={selectedProduct ?? null} members={selectedMembers} onEditMember={setEditingMember} onExportExcel={() => exportCsv(selectedProduct, selectedMembers)} onOpenInvoices={() => setView('invoices')} onBack={() => setSelectedProductId(null)} onDeleteCard={deleteSelectedCard} isDeleting={isDeletingCard} /> : <div className="empty-panel"><h3>Select a card</h3><p>Open any contribution card to manage members, proofs, invoices, and exports.</p></div>}</section></section></>) : view === 'invoices' ? (selectedProduct ? <section className="details-panel paper-card invoice-page-panel"><InvoiceDashboard product={selectedProduct} members={selectedMembers} onBack={() => setView('dashboard')} onInvoiceAction={handleDashboardInvoice} /></section> : <div className="empty-panel paper-card"><h3>Select a card</h3><p>Choose a product card first, then open its invoice dashboard.</p></div>) : view === 'invoice_records' ? <InvoiceRecordsView members={overallMembers} products={products} onInvoiceAction={handleGlobalInvoiceAction} /> : <SettingsView profile={profile} onProfileChange={async (nextProfile) => { await setSetting('master_profile', JSON.stringify(nextProfile)); setProfile(nextProfile); setMessage('Profile saved.') }} onImport={async (file, mode) => { await importBackup(file, mode); const profileRecord = await getSetting('master_profile'); setProfile(profileRecord?.value ? JSON.parse(profileRecord.value) : null); setMessage(`Backup ${mode === 'replace' ? 'restored' : 'merged'} successfully.`) }} />}
