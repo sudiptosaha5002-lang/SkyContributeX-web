@@ -194,7 +194,7 @@ export async function generateInvoice(product: Product, member: Member, profile:
 export function exportExcel(product: Product, members: Member[]) {
   const rows = members.map((member) => ({
     MemberId: member.member_id,
-    InvoiceId: getInvoiceNumber(member),
+    InvoiceId: canGenerateInvoice(member) ? getInvoiceNumber(member) : '',
     Name: member.name,
     AmountDue: member.amount_due,
     AmountPaid: member.amount_paid,
@@ -209,7 +209,7 @@ export function exportExcel(product: Product, members: Member[]) {
 
   const evidenceRows = members.map((member) => ({
     MemberId: member.member_id,
-    InvoiceId: getInvoiceNumber(member),
+    InvoiceId: canGenerateInvoice(member) ? getInvoiceNumber(member) : '',
     Name: member.name,
     PaymentMethod: member.payment_method,
     ProofAvailable: member.proof ? 'Yes' : 'No',
@@ -263,7 +263,7 @@ export function exportExcel(product: Product, members: Member[]) {
 export function exportCsv(product: Product, members: Member[]) {
   const rows = members.map((member) => ({
     MemberId: member.member_id,
-    InvoiceId: getInvoiceNumber(member),
+    InvoiceId: canGenerateInvoice(member) ? getInvoiceNumber(member) : '',
     Name: member.name,
     AmountDue: member.amount_due,
     AmountPaid: member.amount_paid,
