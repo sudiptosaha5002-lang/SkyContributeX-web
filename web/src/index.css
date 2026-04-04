@@ -1203,3 +1203,74 @@ h1, h2, h3, h4 { letter-spacing: -0.04em; }
     grid-template-columns: 1fr;
   }
 }
+.account-access-shell,
+.public-access-shell {
+  width: min(760px, 100%);
+  padding: 1.5rem;
+  align-items: stretch;
+  justify-items: stretch;
+}
+
+.member-access-wrap.public-access-shell {
+  width: min(760px, 100%);
+}
+
+.member-access-head-row {
+  align-items: center;
+}
+
+.member-access-head-row h1 {
+  margin: 0.35rem 0 0.4rem;
+  line-height: 1.05;
+}
+
+.member-access-head-row .auth-subtitle {
+  margin: 0;
+  max-width: 40rem;
+}
+
+.account-mode-grid {
+  width: 100%;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  margin: 0.5rem 0 0.25rem;
+}
+
+.account-mode-grid .ghost-button {
+  width: 100%;
+  min-height: 3.3rem;
+}
+
+.account-form-grid {
+  width: 100%;
+  margin-top: 0.25rem;
+}
+
+.account-form-grid .primary-button {
+  margin-top: 0.35rem;
+}
+
+.public-access-shell .field-shell,
+.public-access-shell .field-shell input,
+.public-access-shell .field-shell textarea,
+.public-access-shell .field-shell select {
+  width: 100%;
+}
+
+@media (max-width: 720px) {
+  .account-access-shell,
+  .public-access-shell {
+    padding: 1rem;
+  }
+
+  .member-access-head-row {
+    align-items: stretch;
+  }
+
+  .member-access-head-row .ghost-button {
+    width: 100%;
+  }
+
+  .account-mode-grid {
+    grid-template-columns: 1fr;
+  }
+}
