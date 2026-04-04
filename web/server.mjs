@@ -2,7 +2,21 @@ import express from 'express'
 import cors from 'cors'
 import nodemailer from 'nodemailer'
 import dotenv from 'dotenv'
-import { readStore, replaceSnapshot, createMagicLink, resolveMagicLink, updateMemberFromMagicLink, searchPublicProducts, createPublicMemberSession } from './server-store.mjs'
+import {
+  createMagicLink,
+  createPublicMemberSession,
+  loginMasterAccount,
+  loginMemberAccount,
+  logoutMasterSession,
+  readStore,
+  registerMasterAccount,
+  registerMemberAccount,
+  replaceSnapshot,
+  resolveMagicLink,
+  resolveMasterSession,
+  searchPublicProducts,
+  updateMemberFromMagicLink,
+} from './server-store.mjs'
 
 dotenv.config()
 
@@ -39,6 +53,73 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true })
 })
 
+app.post('/api/auth/register-master', async (req, res) => {
+  try {
+    const result = await registerMasterAccount(req.body ?? {})
+    res.json({ ok: true, ...result })
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error instanceof Error ? error.message : 'Unable to create master account.' })
+  }
+})
+
+app.post('/api/auth/login-master', async (req, res) => {
+  try {
+    const result = await loginMasterAccount(req.body ?? {})
+    res.json({ ok: true, ...result })
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error instanceof Error ? error.message : 'Unable to log in.' })
+  }
+})
+
+app.get('/api/auth/master-session', async (req, res) => {
+  try {
+    const token = String(req.query.token || '')
+    if (!token) {
+      return res.status(400).json({ ok: false, error: 'Token is required.' })
+    }
+
+    const session = await resolveMasterSession(token)
+    if (!session) {
+      return res.status(404).json({ ok: false, error: 'This master session is invalid or expired.' })
+    }
+
+    res.json({ ok: true, session })
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Unable to restore master session.' })
+  }
+})
+
+app.post('/api/auth/logout-master', async (req, res) => {
+  try {
+    const token = String(req.body?.token || '')
+    if (!token) {
+      return res.status(400).json({ ok: false, error: 'Token is required.' })
+    }
+    await logoutMasterSession(token)
+    res.json({ ok: true })
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Unable to log out.' })
+  }
+})
+
+app.post('/api/auth/register-member', async (req, res) => {
+  try {
+    const result = await registerMemberAccount(req.body ?? {})
+    res.json({ ok: true, ...result })
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error instanceof Error ? error.message : 'Unable to create member account.' })
+  }
+})
+
+app.post('/api/auth/login-member', async (req, res) => {
+  try {
+    const result = await loginMemberAccount(req.body ?? {})
+    res.json({ ok: true, ...result })
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error instanceof Error ? error.message : 'Unable to log in.' })
+  }
+})
+
 app.post('/api/master/sync-snapshot', async (req, res) => {
   try {
     const { profile, products, members } = req.body ?? {}
@@ -59,6 +140,26 @@ app.get('/api/master/snapshot', async (_req, res) => {
     res.json({ ok: true, snapshot })
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Unable to load shared snapshot.' })
+  }
+})
+
+app.get('/api/member-access/public-search', async (req, res) => {
+  try {
+    const q = String(req.query.q || '')
+    const products = await searchPublicProducts(q)
+    res.json({ ok: true, products })
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Unable to search cards.' })
+  }
+})
+
+app.post('/api/member-access/public-verify', async (req, res) => {
+  try {
+    const { productId, email } = req.body ?? {}
+    const result = await createPublicMemberSession(productId, email, MEMBER_LINK_TTL_HOURS * 60 * 60 * 1000)
+    res.json({ ok: true, ...result })
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error instanceof Error ? error.message : 'Unable to verify member access.' })
   }
 })
 

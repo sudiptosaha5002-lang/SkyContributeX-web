@@ -60,6 +60,19 @@ type PublicAccessProduct = {
   created_at: string
 }
 
+type MasterAuthSession = {
+  user: {
+    user_id: string
+    role: 'MASTER'
+    email: string
+    profile_name: string
+    phone: string
+  }
+  profile: MasterProfile | null
+}
+
+type AccountPortalMode = 'master_login' | 'master_signup' | 'member_login' | 'member_signup'
+
 const PAYMENT_METHODS: PaymentMethod[] = ['Cash', 'UPI', 'PayPal', 'Unspecified']
 
 const defaultCreateDraft = (): CreateCardDraft => ({
@@ -83,6 +96,7 @@ const defaultMemberDraft = (member?: Member | null): MemberDraft => ({
 })
 
 const EMAIL_SERVER_URL = (import.meta.env.VITE_EMAIL_SERVER_URL as string | undefined) ?? 'http://localhost:8787'
+const MASTER_AUTH_STORAGE_KEY = 'counterx_master_auth_token'
 
 async function blobToBase64(blob: Blob) {
   const buffer = await blob.arrayBuffer()
@@ -210,6 +224,75 @@ async function verifyPublicMemberAccess(params: { productId: string; email: stri
   const result = await response.json().catch(() => ({ ok: false, error: 'Unable to verify member access.' }))
   if (!response.ok || !result.ok) {
     throw new Error(result.error || 'Unable to verify member access.')
+  }
+  return result as { ok: true; token: string; session: MemberAccessSession }
+}
+
+async function registerMasterAccountRequest(params: { name: string; email: string; phone: string; password: string }) {
+  const response = await fetch(`${EMAIL_SERVER_URL}/api/auth/register-master`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  })
+  const result = await response.json().catch(() => ({ ok: false, error: 'Unable to create master account.' }))
+  if (!response.ok || !result.ok) {
+    throw new Error(result.error || 'Unable to create master account.')
+  }
+  return result as { ok: true; token: string; session: MasterAuthSession }
+}
+
+async function loginMasterAccountRequest(params: { email: string; password: string }) {
+  const response = await fetch(`${EMAIL_SERVER_URL}/api/auth/login-master`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  })
+  const result = await response.json().catch(() => ({ ok: false, error: 'Unable to log in.' }))
+  if (!response.ok || !result.ok) {
+    throw new Error(result.error || 'Unable to log in.')
+  }
+  return result as { ok: true; token: string; session: MasterAuthSession }
+}
+
+async function fetchMasterSessionRequest(token: string) {
+  const response = await fetch(`${EMAIL_SERVER_URL}/api/auth/master-session?token=${encodeURIComponent(token)}`)
+  const result = await response.json().catch(() => ({ ok: false, error: 'Unable to restore master session.' }))
+  if (!response.ok || !result.ok) {
+    throw new Error(result.error || 'Unable to restore master session.')
+  }
+  return result.session as MasterAuthSession
+}
+
+async function logoutMasterSessionRequest(token: string) {
+  await fetch(`${EMAIL_SERVER_URL}/api/auth/logout-master`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  }).catch(() => undefined)
+}
+
+async function registerMemberAccountRequest(params: { productId: string; email: string; password: string }) {
+  const response = await fetch(`${EMAIL_SERVER_URL}/api/auth/register-member`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  })
+  const result = await response.json().catch(() => ({ ok: false, error: 'Unable to create member account.' }))
+  if (!response.ok || !result.ok) {
+    throw new Error(result.error || 'Unable to create member account.')
+  }
+  return result as { ok: true; token: string; session: MemberAccessSession }
+}
+
+async function loginMemberAccountRequest(params: { productId: string; email: string; password: string }) {
+  const response = await fetch(`${EMAIL_SERVER_URL}/api/auth/login-member`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  })
+  const result = await response.json().catch(() => ({ ok: false, error: 'Unable to log in.' }))
+  if (!response.ok || !result.ok) {
+    throw new Error(result.error || 'Unable to log in.')
   }
   return result as { ok: true; token: string; session: MemberAccessSession }
 }
@@ -941,6 +1024,175 @@ function MemberEditor(props: {
 }
 
 
+function AccountAccessPortal(props: {
+  onClose: () => void
+  onMasterAuthenticated: (token: string, session: MasterAuthSession) => void
+  onMemberAuthenticated: (token: string, session: MemberAccessSession) => void
+}) {
+  const [mode, setMode] = useState<AccountPortalMode>('master_login')
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<PublicAccessProduct[]>([])
+  const [selectedProduct, setSelectedProduct] = useState<PublicAccessProduct | null>(null)
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [phone, setPhone] = useState('')
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [message, setMessage] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const memberMode = mode === 'member_login' || mode === 'member_signup'
+  const signupMode = mode === 'master_signup' || mode === 'member_signup'
+
+  async function handleSearch() {
+    const trimmed = query.trim()
+    if (trimmed.length < 2) {
+      setMessage('Enter at least 2 characters of the product name or product card ID.')
+      setResults([])
+      return
+    }
+
+    setBusy(true)
+    setMessage('')
+    try {
+      const nextResults = await searchPublicMemberProducts(trimmed)
+      setResults(nextResults)
+      if (nextResults.length === 0) {
+        setMessage('No product card matched that name or card ID.')
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Unable to search cards.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleSubmit() {
+    if (memberMode && !selectedProduct) {
+      setMessage('Choose your product card first.')
+      return
+    }
+
+    if (!email.trim()) {
+      setMessage('Email is required.')
+      return
+    }
+
+    if (password.length < 6) {
+      setMessage('Password must be at least 6 characters.')
+      return
+    }
+
+    if (signupMode && password !== confirmPassword) {
+      setMessage('Password confirmation does not match.')
+      return
+    }
+
+    setBusy(true)
+    setMessage('')
+    try {
+      if (mode === 'master_signup') {
+        if (!name.trim()) {
+          throw new Error('Master name is required.')
+        }
+        const result = await registerMasterAccountRequest({
+          name: name.trim(),
+          email: email.trim(),
+          phone: phone.trim(),
+          password,
+        })
+        props.onMasterAuthenticated(result.token, result.session)
+        return
+      }
+
+      if (mode === 'master_login') {
+        const result = await loginMasterAccountRequest({ email: email.trim(), password })
+        props.onMasterAuthenticated(result.token, result.session)
+        return
+      }
+
+      if (!selectedProduct) {
+        throw new Error('Choose your product card first.')
+      }
+
+      if (mode === 'member_signup') {
+        const result = await registerMemberAccountRequest({ productId: selectedProduct.product_id, email: email.trim(), password })
+        props.onMemberAuthenticated(result.token, result.session)
+        return
+      }
+
+      const result = await loginMemberAccountRequest({ productId: selectedProduct.product_id, email: email.trim(), password })
+      props.onMemberAuthenticated(result.token, result.session)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Unable to continue.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function switchMode(nextMode: AccountPortalMode) {
+    setMode(nextMode)
+    setMessage('')
+    setPassword('')
+    setConfirmPassword('')
+  }
+
+  return (
+    <div className="auth-shell member-access-shell">
+      <section className="auth-lock-wrap member-access-wrap paper-card public-access-shell">
+        <div className="member-access-head-row">
+          <div>
+            <div className="auth-brand-badge">Account Access</div>
+            <h1>Sign in or create an account</h1>
+            <p className="auth-subtitle">Masters can manage the whole workspace. Members can sign in to only their own saved contribution entry.</p>
+          </div>
+          <button className="ghost-button" type="button" onClick={props.onClose}>Back</button>
+        </div>
+
+        <div className="account-mode-grid">
+          <button className={clsx('ghost-button', mode === 'master_login' && 'nav-button-active')} type="button" onClick={() => switchMode('master_login')}>Master Login</button>
+          <button className={clsx('ghost-button', mode === 'master_signup' && 'nav-button-active')} type="button" onClick={() => switchMode('master_signup')}>Master Sign Up</button>
+          <button className={clsx('ghost-button', mode === 'member_login' && 'nav-button-active')} type="button" onClick={() => switchMode('member_login')}>Member Login</button>
+          <button className={clsx('ghost-button', mode === 'member_signup' && 'nav-button-active')} type="button" onClick={() => switchMode('member_signup')}>Member Sign Up</button>
+        </div>
+
+        {memberMode ? (
+          <>
+            <div className="auth-setup-grid member-access-grid public-access-grid" onKeyDown={(event) => handleProceedOnEnter(event, () => void handleSearch())}>
+              <Field label="Product name or card ID" value={query} onChange={setQuery} />
+              <button className="primary-button" type="button" disabled={busy} onClick={() => void handleSearch()}>{busy ? 'Searching...' : 'Search card'}</button>
+            </div>
+            <div className="public-access-results">
+              {results.map((product) => (
+                <article key={product.product_id} className={clsx('paper-card public-access-card', selectedProduct?.product_id === product.product_id && 'public-access-card-active')}>
+                  <div>
+                    <p className="eyebrow">Product Card</p>
+                    <h3>{product.title}</h3>
+                    <p>{product.description || 'No notes yet.'}</p>
+                    <span className="public-access-meta">ID: {product.product_id} | Members: {product.members_count}</span>
+                  </div>
+                  <button className="secondary-button" type="button" onClick={() => { setSelectedProduct(product); setMessage('') }}>{selectedProduct?.product_id === product.product_id ? 'Selected' : 'Choose'}</button>
+                </article>
+              ))}
+            </div>
+          </>
+        ) : null}
+
+        <div className="auth-setup-grid account-form-grid" onKeyDown={(event) => handleProceedOnEnter(event, () => void handleSubmit())}>
+          {mode === 'master_signup' ? <Field label="Master name" value={name} onChange={setName} /> : null}
+          <Field label={memberMode ? 'Member email' : 'Email'} value={email} onChange={setEmail} type="email" />
+          {mode === 'master_signup' ? <Field label="Phone (optional)" value={phone} onChange={setPhone} /> : null}
+          <Field label="Password" value={password} onChange={setPassword} type="password" />
+          {signupMode ? <Field label="Confirm password" value={confirmPassword} onChange={setConfirmPassword} type="password" /> : null}
+          <button className="primary-button" type="button" disabled={busy} onClick={() => void handleSubmit()}>{busy ? 'Please wait...' : mode === 'master_signup' ? 'Create master account' : mode === 'master_login' ? 'Login as master' : mode === 'member_signup' ? 'Create member account' : 'Login as member'}</button>
+        </div>
+
+        {message ? <p className="warning-text">{message}</p> : null}
+      </section>
+    </div>
+  )
+}
+
 function PublicMemberAccessLookup(props: {
   onOpenSession: (token: string, session: MemberAccessSession) => void
   onClose: () => void
@@ -1259,6 +1511,8 @@ function App() {
   const [memberAccessSession, setMemberAccessSession] = useState<MemberAccessSession | null>(null)
   const [memberAccessLoading, setMemberAccessLoading] = useState(false)
   const [memberAccessError, setMemberAccessError] = useState('')
+  const [authPortalOpen, setAuthPortalOpen] = useState(false)
+  const [masterAuthLoading, setMasterAuthLoading] = useState(true)
 
   const products = useLiveQuery(async () => db.products.orderBy('created_at').reverse().toArray(), [], [])
   const overallMembers = useLiveQuery(async () => db.members.toArray(), [], [])
@@ -1274,8 +1528,28 @@ function App() {
         getSetting('pin_hash'),
         getSetting('master_profile'),
       ])
+      const savedProfile = profileRecord?.value ? JSON.parse(profileRecord.value) : null
       setHasPin(Boolean(pinRecord?.value))
-      setProfile(profileRecord?.value ? JSON.parse(profileRecord.value) : null)
+      setProfile(savedProfile)
+
+      const masterToken = window.localStorage.getItem(MASTER_AUTH_STORAGE_KEY)
+      if (!masterToken) {
+        setMasterAuthLoading(false)
+        return
+      }
+
+      try {
+        const session = await fetchMasterSessionRequest(masterToken)
+        if (session.profile) {
+          await setSetting('master_profile', JSON.stringify(session.profile))
+          setProfile(session.profile)
+        }
+        setUnlocked(true)
+      } catch {
+        window.localStorage.removeItem(MASTER_AUTH_STORAGE_KEY)
+      } finally {
+        setMasterAuthLoading(false)
+      }
     })()
   }, [])
 
@@ -1556,6 +1830,11 @@ function App() {
   }
 
   function handleLogout() {
+    const masterToken = window.localStorage.getItem(MASTER_AUTH_STORAGE_KEY)
+    if (masterToken) {
+      void logoutMasterSessionRequest(masterToken)
+      window.localStorage.removeItem(MASTER_AUTH_STORAGE_KEY)
+    }
     setUnlocked(false)
     setPin('')
     setSelectedProductId(null)
@@ -1565,6 +1844,7 @@ function App() {
     setEmailDialogOpen(false)
     setEmailTargetMember(null)
     setEmailTargetProduct(null)
+    setAuthPortalOpen(false)
     setMessage('Logged out.')
   }
 
@@ -1671,12 +1951,35 @@ function App() {
     return <PublicMemberAccessLookup onOpenSession={(token, session) => { setMemberAccessTokenState(token); setMemberAccessSession(session); setMemberPortalOpen(false); setMemberAccessError(''); setMemberAccessLoading(false) }} onClose={() => { setMemberPortalOpen(false); setMemberAccessSession(null); setMemberAccessTokenState('') }} />
   }
 
+  if (authPortalOpen) {
+    return <AccountAccessPortal onClose={() => setAuthPortalOpen(false)} onMasterAuthenticated={async (token, session) => {
+      window.localStorage.setItem(MASTER_AUTH_STORAGE_KEY, token)
+      if (session.profile) {
+        await setSetting('master_profile', JSON.stringify(session.profile))
+        setProfile(session.profile)
+      }
+      setUnlocked(true)
+      setAuthPortalOpen(false)
+      setMessage('Login successful.')
+    }} onMemberAuthenticated={(token, session) => {
+      setMemberAccessTokenState(token)
+      setMemberAccessSession(session)
+      setAuthPortalOpen(false)
+      setMemberAccessError('')
+      setMemberAccessLoading(false)
+    }} />
+  }
+
+  if (masterAuthLoading) {
+    return <div className="auth-shell member-access-shell"><section className="auth-lock-wrap member-access-wrap paper-card"><div className="auth-brand-badge">Loading</div><h1>Restoring your workspace</h1><p className="auth-subtitle">Checking saved account access...</p></section></div>
+  }
+
   if (!hasPin) {
-    return <AuthShell title="ContriTrack" subtitle="Set your PIN to secure the workspace" pinValue={setupPin} onPinChange={setSetupPin} onSubmit={() => void handleSetup()} buttonLabel="Finish Setup" message={message}><div className="auth-setup-grid"><Field label="Confirm PIN" value={confirmPin} onChange={setConfirmPin} type="password" inputMode="numeric" /><Field label="Master name" value={setupName} onChange={setSetupName} /><Field label="Email" value={setupEmail} onChange={setSetupEmail} type="email" /><Field label="Phone (optional)" value={setupPhone} onChange={setSetupPhone} /></div></AuthShell>
+    return <AuthShell title="ContriTrack" subtitle="Set your PIN to secure the workspace or open account access" pinValue={setupPin} onPinChange={setSetupPin} onSubmit={() => void handleSetup()} buttonLabel="Finish Setup" message={message}><div className="auth-setup-grid"><Field label="Confirm PIN" value={confirmPin} onChange={setConfirmPin} type="password" inputMode="numeric" /><Field label="Master name" value={setupName} onChange={setSetupName} /><Field label="Email" value={setupEmail} onChange={setSetupEmail} type="email" /><Field label="Phone (optional)" value={setupPhone} onChange={setSetupPhone} /></div><button className="ghost-button auth-secondary-button" type="button" onClick={() => { setAuthPortalOpen(true); setMessage('') }}>Account login</button></AuthShell>
   }
 
   if (!isUnlocked) {
-    return <AuthShell title="ContriTrack" subtitle="Enter PIN to unlock" pinValue={pin} onPinChange={setPin} onSubmit={() => void handleUnlock()} buttonLabel="Unlock" message={message}><button className="ghost-button auth-secondary-button" type="button" onClick={() => { setMemberPortalOpen(true); setMessage('') }}>Member access</button></AuthShell>
+    return <AuthShell title="ContriTrack" subtitle="Enter PIN to unlock or use account access" pinValue={pin} onPinChange={setPin} onSubmit={() => void handleUnlock()} buttonLabel="Unlock" message={message}><button className="ghost-button auth-secondary-button" type="button" onClick={() => { setMemberPortalOpen(true); setMessage('') }}>Member access</button><button className="ghost-button auth-secondary-button" type="button" onClick={() => { setAuthPortalOpen(true); setMessage('') }}>Account login</button></AuthShell>
   }
 
   return (
@@ -1697,6 +2000,10 @@ function App() {
 }
 
 export default App
+
+
+
+
 
 
 
