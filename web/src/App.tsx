@@ -5,7 +5,7 @@ import { sha256 } from 'js-sha256'
 import clsx from 'clsx'
 import './index.css'
 import { db, getSetting, setSetting } from './lib/db'
-import { computeStatus, exportBackup, exportCsv, generateInvoice, getInvoiceNumber, importBackup, makeId, money, normalizeProof, nowIso } from './lib/utils'
+import { canGenerateInvoice, computeStatus, exportBackup, exportCsv, generateInvoice, getInvoiceNumber, importBackup, makeId, money, normalizeProof, nowIso } from './lib/utils'
 import type { MasterProfile, Member, MemberAccessSession, PaymentMethod, Product, StoredAsset } from './types'
 
 type View = 'dashboard' | 'settings' | 'invoices' | 'invoice_records'
@@ -396,6 +396,7 @@ function InvoiceDashboard(props: {
   onBack: () => void
   onInvoiceAction: (member: Member, action: 'preview' | 'download' | 'send') => Promise<void>
 }) {
+  const invoiceMembers = props.members.filter(canGenerateInvoice)
   const [busyMemberId, setBusyMemberId] = useState<string | null>(null)
   const [busyAction, setBusyAction] = useState<'preview' | 'download' | 'send' | null>(null)
 
@@ -421,7 +422,7 @@ function InvoiceDashboard(props: {
       </div>
 
       <section className="invoice-member-list invoice-member-list-page">
-        {props.members.map((member) => {
+        {invoiceMembers.map((member) => {
           const busy = busyMemberId === member.member_id
           return (
             <article key={`invoice_${member.member_id}`} className={clsx('invoice-member-card', member.status === 'PAID' ? 'invoice-member-card-paid' : 'invoice-member-card-pending')}>
@@ -439,6 +440,7 @@ function InvoiceDashboard(props: {
             </article>
           )
         })}
+        {invoiceMembers.length === 0 ? <article className="paper-card empty-state">No invoices are available yet. Record a payment amount first.</article> : null}
       </section>
     </div>
   )
@@ -457,6 +459,7 @@ function InvoiceRecordsView(props: {
   const rows = useMemo(() => {
     const byId = new Map(props.products.map((product) => [product.product_id, product]))
     return props.members
+      .filter(canGenerateInvoice)
       .map((member) => ({ member, product: byId.get(member.product_id) ?? null }))
       .filter((row): row is { member: Member; product: Product } => row.product !== null)
   }, [props.members, props.products])
@@ -1250,6 +1253,11 @@ function App() {
   async function handleDashboardInvoice(member: Member, action: 'preview' | 'download' | 'send') {
     if (!selectedProduct || !profile) {
       setMessage('Open a product card first.')
+      return
+    }
+
+    if (!canGenerateInvoice(member)) {
+      setMessage('Record a paid amount before generating an invoice.')
       return
     }
 

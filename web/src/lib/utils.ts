@@ -14,6 +14,7 @@ export const amountText = (value: number) => `INR ${new Intl.NumberFormat('en-IN
 export const nowIso = () => new Date().toISOString()
 export const makeId = (prefix: string) => `${prefix}_${crypto.randomUUID()}`
 export const computeStatus = (amountPaid: number, amountDue: number) => (amountPaid >= amountDue ? 'PAID' : 'PENDING')
+export const canGenerateInvoice = (member: Member) => member.amount_paid > 0
 export const getInvoiceNumber = (member: Member) => `INV-${member.member_id.slice(-8).toUpperCase()}`
 
 export async function fileToDataUrl(file: File) {
@@ -73,6 +74,10 @@ function addInvoiceBand(doc: jsPDF, y: number, height: number, fill: [number, nu
 }
 
 export async function generateInvoice(product: Product, member: Member, profile: MasterProfile) {
+  if (!canGenerateInvoice(member)) {
+    throw new Error('Invoice can only be generated after a payment amount is recorded.')
+  }
+
   const doc = new jsPDF()
   doc.setFillColor(250, 243, 234)
   doc.rect(0, 0, 210, 297, 'F')
