@@ -14,6 +14,7 @@ export const amountText = (value: number) => `INR ${new Intl.NumberFormat('en-IN
 export const nowIso = () => new Date().toISOString()
 export const makeId = (prefix: string) => `${prefix}_${crypto.randomUUID()}`
 export const computeStatus = (amountPaid: number, amountDue: number) => (amountPaid >= amountDue ? 'PAID' : 'PENDING')
+export const getInvoiceNumber = (member: Member) => `INV-${member.member_id.slice(-8).toUpperCase()}`
 
 export async function fileToDataUrl(file: File) {
   return new Promise<string>((resolve, reject) => {
@@ -125,6 +126,7 @@ export async function generateInvoice(product: Product, member: Member, profile:
 
   const paymentLines = [
     ['Client', member.name],
+    ['Client email', member.email || 'Not provided'],
     ['Amount due', amountText(member.amount_due)],
     ['Amount paid', amountText(member.amount_paid)],
     ['Payment method', member.payment_method],
@@ -297,3 +299,5 @@ export async function importBackup(file: File, mode: 'merge' | 'replace') {
   await db.members.bulkPut(normalizedMembers)
   await db.settings.bulkPut(payload.settings ?? [])
 }
+
+

@@ -206,9 +206,9 @@ h1, h2, h3, h4 { letter-spacing: -0.04em; }
 }
 .stat-row, .summary-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.75rem;
 }
+.stat-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .summary-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .stat-pill {
   background: var(--surface-soft);
@@ -906,7 +906,7 @@ h1, h2, h3, h4 { letter-spacing: -0.04em; }
 
   .mobile-bottom-nav {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 0.55rem;
     position: fixed;
     left: max(0.75rem, env(safe-area-inset-left));
@@ -1104,3 +1104,39 @@ h1, h2, h3, h4 { letter-spacing: -0.04em; }
     right: 0.5rem;
   }
 }
+
+@media (max-width: 720px) {
+  .product-head-delete-button {
+    width: 100%;
+  }
+}
+
+.ledger-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+.card-inline-delete-button {
+  border-color: #c84545;
+  color: #9f1f1f;
+  background: #fff0f0;
+}
+.card-inline-delete-button:hover {
+  background: #ffdede;
+}
+.card-inline-delete-button:disabled {
+  opacity: 0.6;
+}
+
+.invoice-records-filter-row {
+  margin: 0.6rem 0 0.95rem;
+}
+.invoice-status-filter {
+  min-width: 170px;
+}
+.invoice-records-panel .invoice-member-copy span {
+  display: block;
+  margin-top: 0.2rem;
+}
+
+

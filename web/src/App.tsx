@@ -5,10 +5,10 @@ import { sha256 } from 'js-sha256'
 import clsx from 'clsx'
 import './index.css'
 import { db, getSetting, setSetting } from './lib/db'
-import { computeStatus, exportBackup, exportCsv, generateInvoice, importBackup, makeId, money, normalizeProof, nowIso } from './lib/utils'
+import { computeStatus, exportBackup, exportCsv, generateInvoice, getInvoiceNumber, importBackup, makeId, money, normalizeProof, nowIso } from './lib/utils'
 import type { MasterProfile, Member, MemberAccessSession, PaymentMethod, Product, StoredAsset } from './types'
 
-type View = 'dashboard' | 'settings' | 'invoices'
+type View = 'dashboard' | 'settings' | 'invoices' | 'invoice_records'
 
 type DeferredInstallPrompt = Event & {
   prompt: () => Promise<void>
@@ -429,7 +429,7 @@ function InvoiceDashboard(props: {
               <div className="invoice-member-copy">
                 <h4>{member.name}</h4>
                 <p>{money(member.amount_paid)} / {money(member.amount_due)}</p>
-                <span>{member.payment_method} | {member.status}</span>
+                <span>{getInvoiceNumber(member)} | {member.payment_method} | {member.status}</span>
               </div>
               <div className="invoice-member-actions">
                 <button className="invoice-pill" type="button" disabled={busy} onClick={() => void handleAction(member, 'download')}>{busy && busyAction === 'download' ? '...' : 'PDF'}</button>
@@ -444,6 +444,96 @@ function InvoiceDashboard(props: {
   )
 }
 
+function InvoiceRecordsView(props: {
+  members: Member[]
+  products: Product[]
+  onInvoiceAction: (product: Product, member: Member, action: 'preview' | 'download' | 'send') => Promise<void>
+}) {
+  const [busyKey, setBusyKey] = useState<string | null>(null)
+  const [busyAction, setBusyAction] = useState<'preview' | 'download' | 'send' | null>(null)
+  const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'PAID' | 'PENDING'>('ALL')
+
+  const rows = useMemo(() => {
+    const byId = new Map(props.products.map((product) => [product.product_id, product]))
+    return props.members
+      .map((member) => ({ member, product: byId.get(member.product_id) ?? null }))
+      .filter((row): row is { member: Member; product: Product } => row.product !== null)
+  }, [props.members, props.products])
+
+  const filteredRows = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return rows.filter((row) => {
+      if (statusFilter !== 'ALL' && row.member.status !== statusFilter) return false
+      if (!q) return true
+      return row.member.name.toLowerCase().includes(q)
+        || (row.member.email ?? '').toLowerCase().includes(q)
+        || row.product.title.toLowerCase().includes(q)
+        || row.member.status.toLowerCase().includes(q)
+        || getInvoiceNumber(row.member).toLowerCase().includes(q)
+    })
+  }, [rows, search, statusFilter])
+
+  async function handleAction(product: Product, member: Member, action: 'preview' | 'download' | 'send') {
+    const key = member.member_id + '_' + action
+    setBusyKey(key)
+    setBusyAction(action)
+    try {
+      await props.onInvoiceAction(product, member, action)
+    } finally {
+      setBusyKey(null)
+      setBusyAction(null)
+    }
+  }
+
+  return (
+    <section className="details-panel paper-card invoice-records-panel">
+      <div className="details-header">
+        <div>
+          <p className="eyebrow">Invoice records</p>
+          <h3>All payer invoice details</h3>
+        </div>
+      </div>
+      <div className="toolbar-main invoice-records-filter-row">
+        <label className="search-field">
+          <span>Search by member / product / email / status</span>
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search invoice records" />
+        </label>
+        <label className="field-shell invoice-status-filter">
+          <span>Status</span>
+          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as 'ALL' | 'PAID' | 'PENDING')}>
+            <option value="ALL">All</option>
+            <option value="PAID">Paid</option>
+            <option value="PENDING">Pending</option>
+          </select>
+        </label>
+      </div>
+
+      <div className="invoice-member-list invoice-member-list-page">
+        {filteredRows.map(({ member, product }) => {
+          const busy = busyKey !== null && busyKey.startsWith(member.member_id + '_')
+          return (
+            <article key={'record_' + member.member_id} className={clsx('invoice-member-card', member.status === 'PAID' ? 'invoice-member-card-paid' : 'invoice-member-card-pending')}>
+              <div className="invoice-member-avatar">{(member.name.trim()[0] || 'M').toUpperCase()}</div>
+              <div className="invoice-member-copy">
+                <h4>{member.name}</h4>
+                <p>{money(member.amount_paid)} / {money(member.amount_due)}</p>
+                <span>{getInvoiceNumber(member)} | {product.title} | {member.email || 'No email'} | {member.payment_method} | {member.status}</span>
+              </div>
+              <div className="invoice-member-actions">
+                <button className="invoice-pill" type="button" disabled={busy} onClick={() => void handleAction(product, member, 'download')}>{busy && busyAction === 'download' ? '...' : 'PDF'}</button>
+                <button className="invoice-send" type="button" disabled={busy} onClick={() => void handleAction(product, member, 'send')}>{busy && busyAction === 'send' ? '...' : 'Send'}</button>
+                <button className="invoice-pill" type="button" disabled={busy} onClick={() => void handleAction(product, member, 'preview')}>{busy && busyAction === 'preview' ? '...' : 'Preview'}</button>
+              </div>
+            </article>
+          )
+        })}
+      </div>
+
+      {filteredRows.length === 0 ? <article className="paper-card empty-state">No invoice records found for the current filters.</article> : null}
+    </section>
+  )
+}
 function SettingsView(props: {
   profile: MasterProfile | null
   onProfileChange: (profile: MasterProfile) => Promise<void>
@@ -635,7 +725,7 @@ function MemberEditor(props: {
       setDraft(normalizedDraft)
       const memberForInvoice = await props.onSave(props.member, normalizedDraft, { closeEditor: false })
       const blob = await generateInvoice(props.product, memberForInvoice, props.profile)
-      const fileName = `${props.product.title.replace(/\s+/g, '_')}_${memberForInvoice.name.replace(/\s+/g, '_')}.pdf`
+      const fileName = `${getInvoiceNumber(memberForInvoice)}_${props.product.title.replace(/\s+/g, '_')}_${memberForInvoice.name.replace(/\s+/g, '_')}.pdf`
 
       if (action === 'save') {
         saveAs(blob, fileName)
@@ -681,11 +771,11 @@ function MemberEditor(props: {
       setDraft(normalizedDraft)
       const memberForInvoice = await props.onSave(props.member, normalizedDraft, { closeEditor: false })
       const blob = await generateInvoice(props.product, memberForInvoice, props.profile)
-      const fileName = `${props.product.title.replace(/\s+/g, '_')}_${memberForInvoice.name.replace(/\s+/g, '_')}.pdf`
+      const fileName = `${getInvoiceNumber(memberForInvoice)}_${props.product.title.replace(/\s+/g, '_')}_${memberForInvoice.name.replace(/\s+/g, '_')}.pdf`
       await sendInvoiceEmailRequest({
         to: email,
-        subject: `Invoice for ${memberForInvoice.name} - ${props.product.title}`,
-        text: `Hello ${memberForInvoice.name},\n\nPlease find your invoice for ${props.product.title} attached.\n\nAmount paid: ${money(memberForInvoice.amount_paid)}\nAmount due: ${money(memberForInvoice.amount_due)}\nPayment method: ${memberForInvoice.payment_method}\n\nRegards,\nfriendsgamingproject & ASPD Coding`,
+        subject: `Invoice ${getInvoiceNumber(memberForInvoice)} for ${memberForInvoice.name} - ${props.product.title}`,
+        text: `Hello ${memberForInvoice.name},\n\nPlease find your invoice ${getInvoiceNumber(memberForInvoice)} for ${props.product.title} attached.\n\nAmount paid: ${money(memberForInvoice.amount_paid)}\nAmount due: ${money(memberForInvoice.amount_due)}\nPayment method: ${memberForInvoice.payment_method}\n\nRegards,\nfriendsgamingproject & ASPD Coding`,
         filename: fileName,
         blob,
       })
@@ -1011,6 +1101,7 @@ function App() {
   const [emailStatus, setEmailStatus] = useState('')
   const [emailStatusTone, setEmailStatusTone] = useState<'success' | 'error' | 'idle'>('idle')
   const [emailTargetMember, setEmailTargetMember] = useState<Member | null>(null)
+  const [emailTargetProduct, setEmailTargetProduct] = useState<Product | null>(null)
   const [isPullingRemote, setIsPullingRemote] = useState(false)
   const [isDeletingCard, setIsDeletingCard] = useState(false)
   const [memberAccessToken] = useState(() => new URLSearchParams(window.location.search).get('member_access_token') ?? '')
@@ -1163,7 +1254,7 @@ function App() {
     }
 
     const blob = await generateInvoice(selectedProduct, member, profile)
-    const fileName = `${selectedProduct.title.replace(/\s+/g, '_')}_${member.name.replace(/\s+/g, '_')}.pdf`
+    const fileName = `${getInvoiceNumber(member)}_${selectedProduct.title.replace(/\s+/g, '_')}_${member.name.replace(/\s+/g, '_')}.pdf`
 
     if (action === 'download') {
       saveAs(blob, fileName)
@@ -1178,14 +1269,45 @@ function App() {
     }
 
     setEmailTargetMember(member)
+    setEmailTargetProduct(selectedProduct)
     setEmailRecipient('')
     setEmailStatus('Invoice is ready to send.')
     setEmailStatusTone('idle')
     setEmailDialogOpen(true)
   }
 
+  async function handleGlobalInvoiceAction(product: Product, member: Member, action: 'preview' | 'download' | 'send') {
+    if (!profile) {
+      setMessage('Complete master profile first.')
+      return
+    }
+
+    const blob = await generateInvoice(product, member, profile)
+    const fileName = getInvoiceNumber(member) + '_' + product.title.replace(/\s+/g, '_') + '_' + member.name.replace(/\s+/g, '_') + '.pdf'
+
+    if (action === 'download') {
+      saveAs(blob, fileName)
+      return
+    }
+
+    if (action === 'preview') {
+      const url = URL.createObjectURL(blob)
+      window.open(url, '_blank', 'noopener,noreferrer')
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      return
+    }
+
+    setEmailTargetMember(member)
+    setEmailTargetProduct(product)
+    setEmailRecipient(member.email ?? '')
+    setEmailStatus('Invoice is ready to send.')
+    setEmailStatusTone('idle')
+    setEmailDialogOpen(true)
+  }
+
   async function handleSendDashboardEmail() {
-    if (!selectedProduct || !profile || !emailTargetMember) return
+    const sourceProduct = emailTargetProduct ?? selectedProduct
+    if (!sourceProduct || !profile || !emailTargetMember) return
     const email = emailRecipient.trim()
     if (!email) {
       setEmailStatus('Please enter a recipient email.')
@@ -1196,12 +1318,12 @@ function App() {
     setEmailStatus('Sending invoice email...')
     setEmailStatusTone('idle')
     try {
-      const blob = await generateInvoice(selectedProduct, emailTargetMember, profile)
-      const fileName = `${selectedProduct.title.replace(/\s+/g, '_')}_${emailTargetMember.name.replace(/\s+/g, '_')}.pdf`
+      const blob = await generateInvoice(sourceProduct, emailTargetMember, profile)
+      const fileName = `${getInvoiceNumber(emailTargetMember)}_${sourceProduct.title.replace(/\s+/g, '_')}_${emailTargetMember.name.replace(/\s+/g, '_')}.pdf`
       await sendInvoiceEmailRequest({
         to: email,
-        subject: `Invoice for ${emailTargetMember.name} - ${selectedProduct.title}`,
-        text: `Hello ${emailTargetMember.name},\n\nPlease find your invoice for ${selectedProduct.title} attached.\n\nAmount paid: ${money(emailTargetMember.amount_paid)}\nAmount due: ${money(emailTargetMember.amount_due)}\nPayment method: ${emailTargetMember.payment_method}\n\nRegards,\nfriendsgamingproject & ASPD Coding`,
+        subject: `Invoice ${getInvoiceNumber(emailTargetMember)} for ${emailTargetMember.name} - ${sourceProduct.title}`,
+        text: `Hello ${emailTargetMember.name},\n\nPlease find your invoice ${getInvoiceNumber(emailTargetMember)} for ${sourceProduct.title} attached.\n\nAmount paid: ${money(emailTargetMember.amount_paid)}\nAmount due: ${money(emailTargetMember.amount_due)}\nPayment method: ${emailTargetMember.payment_method}\n\nRegards,\nfriendsgamingproject & ASPD Coding`,
         filename: fileName,
         blob,
       })
@@ -1277,23 +1399,22 @@ function App() {
     setMessage('Use your browser menu and choose Install app or Add to Home screen.')
   }
 
-  async function deleteSelectedCard() {
-    if (!selectedProduct) {
-      setMessage('Select a card first.')
-      return
-    }
-    const shouldDelete = window.confirm(`Delete "${selectedProduct.title}" and all its member entries? This cannot be undone.`)
+  async function deleteCardById(productId: string, productTitle: string) {
+    const shouldDelete = window.confirm(`Delete "${productTitle}" and all its member entries? This cannot be undone.`)
     if (!shouldDelete) return
 
     setIsDeletingCard(true)
     try {
-      const productId = selectedProduct.product_id
       await db.transaction('rw', db.products, db.members, async () => {
         await db.members.where('product_id').equals(productId).delete()
         await db.products.delete(productId)
       })
-      setSelectedProductId(null)
-      setView('dashboard')
+      if (selectedProductId === productId) {
+        setSelectedProductId(null)
+      }
+      if (view === 'invoices') {
+        setView('dashboard')
+      }
       await syncSnapshotFromLocalDb().catch(() => undefined)
       setMessage('Card deleted successfully.')
     } catch (error) {
@@ -1301,6 +1422,14 @@ function App() {
     } finally {
       setIsDeletingCard(false)
     }
+  }
+
+  async function deleteSelectedCard() {
+    if (!selectedProduct) {
+      setMessage('Select a card first.')
+      return
+    }
+    await deleteCardById(selectedProduct.product_id, selectedProduct.title)
   }
 
   async function saveMember(member: Member, draft: MemberDraft, options?: { closeEditor?: boolean }) {
@@ -1339,8 +1468,8 @@ function App() {
     return updated
   }
 
-  const mobileTitle = view === 'dashboard' ? (selectedProduct ? selectedProduct.title : 'Contribution ledger') : view === 'invoices' ? (selectedProduct ? selectedProduct.title + ' invoices' : 'Invoices') : 'Settings'
-  const mobileSubtitle = view === 'dashboard' ? (selectedProduct ? 'Manage product card' : 'Master workspace') : view === 'invoices' ? 'Invoice dashboard' : 'Profile and backup'
+  const mobileTitle = view === 'dashboard' ? (selectedProduct ? selectedProduct.title : 'Contribution ledger') : view === 'invoices' ? (selectedProduct ? selectedProduct.title + ' invoices' : 'Invoices') : view === 'invoice_records' ? 'Invoice records' : 'Settings'
+  const mobileSubtitle = view === 'dashboard' ? (selectedProduct ? 'Manage product card' : 'Master workspace') : view === 'invoices' ? 'Invoice dashboard' : view === 'invoice_records' ? 'All payer records' : 'Profile and backup'
 
   if (memberAccessToken) {
     if (memberAccessLoading) {
@@ -1364,22 +1493,23 @@ function App() {
 
   return (
     <div className={clsx('shell', selectedProduct && view === 'dashboard' && 'shell-product-open')}>
-      <aside className="sidebar paper-card"><div><p className="eyebrow">CounterX</p><h1>Contribution ledger</h1><p className="subtle">Offline-ready for desktop and mobile browsers.</p></div><div className="profile-chip"><strong>{profile?.name ?? 'Master User'}</strong><span>{profile?.email ?? ''}</span></div><nav className="nav-stack"><button className={clsx('nav-button', view === 'dashboard' && 'nav-button-active')} onClick={() => setView('dashboard')}>Dashboard</button><button className={clsx('nav-button', view === 'settings' && 'nav-button-active')} onClick={() => setView('settings')}>Settings</button><button className="nav-button" onClick={() => void handleInstallApp()}>{isStandaloneMode ? 'Installed' : 'Install'}</button><button className="nav-button" onClick={() => setUnlocked(false)}>Lock</button></nav></aside>
+      <aside className="sidebar paper-card"><div><p className="eyebrow">CounterX</p><h1>Contribution ledger</h1><p className="subtle">Offline-ready for desktop and mobile browsers.</p></div><div className="profile-chip"><strong>{profile?.name ?? 'Master User'}</strong><span>{profile?.email ?? ''}</span></div><nav className="nav-stack"><button className={clsx('nav-button', view === 'dashboard' && 'nav-button-active')} onClick={() => setView('dashboard')}>Dashboard</button><button className={clsx('nav-button', view === 'invoice_records' && 'nav-button-active')} onClick={() => setView('invoice_records')}>Invoice Records</button><button className={clsx('nav-button', view === 'settings' && 'nav-button-active')} onClick={() => setView('settings')}>Settings</button><button className="nav-button" onClick={() => void handleInstallApp()}>{isStandaloneMode ? 'Installed' : 'Install'}</button><button className="nav-button" onClick={() => setUnlocked(false)}>Lock</button></nav></aside>
       <header className="mobile-app-bar paper-card"><div className="mobile-app-bar-copy"><p className="eyebrow">{mobileSubtitle}</p><h2>{mobileTitle}</h2></div><div className="mobile-header-actions"><button className="ghost-button" onClick={() => void handleInstallApp()}>{isStandaloneMode ? 'Installed' : 'Install'}</button><button className="ghost-button mobile-lock-button" onClick={() => setUnlocked(false)}>Lock</button></div></header>
       <main className="content">
         <header className="hero-card paper-card"><div><p className="eyebrow">Master workspace</p><h2>{view === 'dashboard' ? 'Track products, payments, proofs, signatures, and exports' : 'Control backup, restore, and master details'}</h2></div><div className="stat-row"><Stat label="Cards" value={String(stats.totalCards)} /><Stat label="Active" value={String(stats.activeCards)} /><Stat label="Completed" value={String(stats.completedCards)} /></div></header>
-        {view === 'dashboard' ? (<><section className="toolbar paper-card"><div className="toolbar-main"><label className="search-field"><span>Search cards</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="search the card" /></label><div className="button-cluster toolbar-actions"><button className="secondary-button" disabled={isPullingRemote} onClick={() => void pullRemoteUpdates()}>{isPullingRemote ? 'Syncing...' : 'Pull remote updates'}</button><button className="primary-button" onClick={() => setShowCreateCard(true)}>Create new card</button></div></div></section><section className="grid-layout"><div className="stack-gap">{filteredProducts.map((product) => { const productMembers = overallMembers.filter((member) => member.product_id === product.product_id); const paidMembers = productMembers.filter((member) => member.status === 'PAID').length; const collected = productMembers.reduce((total, member) => total + member.amount_paid, 0); const progress = productMembers.length ? (paidMembers / productMembers.length) * 100 : 0; return <article key={product.product_id} className={clsx('ledger-card', 'paper-card', selectedProductId === product.product_id && 'ledger-card-active')}><div className="ledger-header"><div><h3>{product.title}</h3><p>{product.description || 'No notes yet.'}</p></div><button className="secondary-button" onClick={() => { setSelectedProductId(product.product_id); setView('dashboard') }}>Open</button></div><div className="mini-stats"><span>Total: {money(product.total_amount)}</span><span>Members: {product.members_count}</span><span>Collected: {money(collected)}</span></div><div className="progress-track"><div className="progress-bar" style={{ width: `${progress}%` }} /></div></article>})}{filteredProducts.length === 0 ? <article className="paper-card empty-state">No contribution cards yet. Create one to get started.</article> : null}</div><section className="details-panel paper-card">{selectedProduct ? <ProductDetails product={selectedProduct ?? null} members={selectedMembers} onEditMember={setEditingMember} onExportExcel={() => exportCsv(selectedProduct, selectedMembers)} onOpenInvoices={() => setView('invoices')} onBack={() => setSelectedProductId(null)} onDeleteCard={deleteSelectedCard} isDeleting={isDeletingCard} /> : <div className="empty-panel"><h3>Select a card</h3><p>Open any contribution card to manage members, proofs, invoices, and exports.</p></div>}</section></section></>) : view === 'invoices' ? (selectedProduct ? <section className="details-panel paper-card invoice-page-panel"><InvoiceDashboard product={selectedProduct} members={selectedMembers} onBack={() => setView('dashboard')} onInvoiceAction={handleDashboardInvoice} /></section> : <div className="empty-panel paper-card"><h3>Select a card</h3><p>Choose a product card first, then open its invoice dashboard.</p></div>) : <SettingsView profile={profile} onProfileChange={async (nextProfile) => { await setSetting('master_profile', JSON.stringify(nextProfile)); setProfile(nextProfile); setMessage('Profile saved.') }} onImport={async (file, mode) => { await importBackup(file, mode); const profileRecord = await getSetting('master_profile'); setProfile(profileRecord?.value ? JSON.parse(profileRecord.value) : null); setMessage(`Backup ${mode === 'replace' ? 'restored' : 'merged'} successfully.`) }} />}
+        {view === 'dashboard' ? (<><section className="toolbar paper-card"><div className="toolbar-main"><label className="search-field"><span>Search cards</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="search the card" /></label><div className="button-cluster toolbar-actions"><button className="secondary-button" disabled={isPullingRemote} onClick={() => void pullRemoteUpdates()}>{isPullingRemote ? 'Syncing...' : 'Pull remote updates'}</button><button className="primary-button" onClick={() => setShowCreateCard(true)}>Create new card</button></div></div></section><section className="grid-layout"><div className="stack-gap">{filteredProducts.map((product) => { const productMembers = overallMembers.filter((member) => member.product_id === product.product_id); const paidMembers = productMembers.filter((member) => member.status === 'PAID').length; const collected = productMembers.reduce((total, member) => total + member.amount_paid, 0); const progress = productMembers.length ? (paidMembers / productMembers.length) * 100 : 0; return <article key={product.product_id} className={clsx('ledger-card', 'paper-card', selectedProductId === product.product_id && 'ledger-card-active')}><div className="ledger-header"><div><h3>{product.title}</h3><p>{product.description || 'No notes yet.'}</p></div><div className="button-cluster ledger-card-actions"><button className="secondary-button" onClick={() => { setSelectedProductId(product.product_id); setView('dashboard') }}>Open</button><button className="secondary-button card-inline-delete-button" disabled={isDeletingCard} onClick={() => void deleteCardById(product.product_id, product.title)}>{isDeletingCard ? 'Deleting...' : 'Delete'}</button></div></div><div className="mini-stats"><span>Total: {money(product.total_amount)}</span><span>Members: {product.members_count}</span><span>Collected: {money(collected)}</span></div><div className="progress-track"><div className="progress-bar" style={{ width: `${progress}%` }} /></div></article>})}{filteredProducts.length === 0 ? <article className="paper-card empty-state">No contribution cards yet. Create one to get started.</article> : null}</div><section className="details-panel paper-card">{selectedProduct ? <ProductDetails product={selectedProduct ?? null} members={selectedMembers} onEditMember={setEditingMember} onExportExcel={() => exportCsv(selectedProduct, selectedMembers)} onOpenInvoices={() => setView('invoices')} onBack={() => setSelectedProductId(null)} onDeleteCard={deleteSelectedCard} isDeleting={isDeletingCard} /> : <div className="empty-panel"><h3>Select a card</h3><p>Open any contribution card to manage members, proofs, invoices, and exports.</p></div>}</section></section></>) : view === 'invoices' ? (selectedProduct ? <section className="details-panel paper-card invoice-page-panel"><InvoiceDashboard product={selectedProduct} members={selectedMembers} onBack={() => setView('dashboard')} onInvoiceAction={handleDashboardInvoice} /></section> : <div className="empty-panel paper-card"><h3>Select a card</h3><p>Choose a product card first, then open its invoice dashboard.</p></div>) : view === 'invoice_records' ? <InvoiceRecordsView members={overallMembers} products={products} onInvoiceAction={handleGlobalInvoiceAction} /> : <SettingsView profile={profile} onProfileChange={async (nextProfile) => { await setSetting('master_profile', JSON.stringify(nextProfile)); setProfile(nextProfile); setMessage('Profile saved.') }} onImport={async (file, mode) => { await importBackup(file, mode); const profileRecord = await getSetting('master_profile'); setProfile(profileRecord?.value ? JSON.parse(profileRecord.value) : null); setMessage(`Backup ${mode === 'replace' ? 'restored' : 'merged'} successfully.`) }} />}
       </main>
-      <nav className="mobile-bottom-nav paper-card"><button className={clsx('mobile-nav-button', view === 'dashboard' && 'mobile-nav-button-active')} onClick={() => setView('dashboard')}>Home</button><button className={clsx('mobile-nav-button', view === 'invoices' && 'mobile-nav-button-active')} onClick={() => { if (selectedProduct) setView('invoices') }} disabled={!selectedProduct}>Invoices</button><button className={clsx('mobile-nav-button', view === 'settings' && 'mobile-nav-button-active')} onClick={() => setView('settings')}>Settings</button></nav>
+      <nav className="mobile-bottom-nav paper-card"><button className={clsx('mobile-nav-button', view === 'dashboard' && 'mobile-nav-button-active')} onClick={() => setView('dashboard')}>Home</button><button className={clsx('mobile-nav-button', view === 'invoices' && 'mobile-nav-button-active')} onClick={() => { if (selectedProduct) setView('invoices') }} disabled={!selectedProduct}>Invoices</button><button className={clsx('mobile-nav-button', view === 'invoice_records' && 'mobile-nav-button-active')} onClick={() => setView('invoice_records')}>Records</button><button className={clsx('mobile-nav-button', view === 'settings' && 'mobile-nav-button-active')} onClick={() => setView('settings')}>Settings</button></nav>
       {showCreateCard ? <dialog open className="modal-shell"><div className="modal-card paper-card create-card-modal"><div className="modal-header"><div><p className="eyebrow">New card</p><h3>Create a contribution card</h3></div><button className="ghost-button" onClick={() => setShowCreateCard(false)}>Close</button></div><div className="form-grid create-card-form" onKeyDown={(event) => handleProceedOnEnter(event, () => void createCard())}><Field label="Product name" value={createDraft.title} onChange={(value) => setCreateDraft((draft) => ({ ...draft, title: value }))} /><Field label="Total amount" value={createDraft.totalAmount} onChange={(value) => setCreateDraft((draft) => ({ ...draft, totalAmount: value }))} inputMode="decimal" /><label className="range-field"><span>Members count: {createDraft.membersCount}</span><input type="range" min="1" max="150" value={createDraft.membersCount} onChange={(event) => setCreateDraft((draft) => ({ ...draft, membersCount: Number(event.target.value) }))} /></label><label className="toggle-row"><span>Auto split</span><input type="checkbox" checked={createDraft.autoSplit} onChange={(event) => setCreateDraft((draft) => ({ ...draft, autoSplit: event.target.checked }))} /></label>{createDraft.autoSplit ? <div className="field-shell read-only-field"><span>Split amount</span><strong>{money(splitAmountPreview)}</strong></div> : <Field label="Split amount" value={createDraft.manualSplit} onChange={(value) => setCreateDraft((draft) => ({ ...draft, manualSplit: value }))} inputMode="decimal" />}<Field label="Deadline" value={createDraft.deadline} onChange={(value) => setCreateDraft((draft) => ({ ...draft, deadline: value }))} type="date" /><Field label="Notes" value={createDraft.notes} onChange={(value) => setCreateDraft((draft) => ({ ...draft, notes: value }))} multiline /></div><div className="modal-footer create-card-footer"><button className="primary-button create-card-submit" onClick={() => void createCard()}>Create card</button></div></div></dialog> : null}
       {editingMember ? <MemberEditor member={editingMember} product={selectedProduct ?? null} profile={profile} onClose={() => setEditingMember(null)} onSave={saveMember} onSendAccessLink={sendMemberAccessLink} /> : null}
-      <EmailSendDialog open={emailDialogOpen} title={emailTargetMember ? `Send invoice to ${emailTargetMember.name}` : 'Send invoice'} recipientEmail={emailRecipient} onRecipientEmailChange={setEmailRecipient} onClose={() => { setEmailDialogOpen(false); setEmailTargetMember(null); setEmailStatus(''); setEmailStatusTone('idle') }} onSend={() => void handleSendDashboardEmail()} isSending={emailStatus === 'Sending invoice email...'} statusMessage={emailStatus} statusTone={emailStatusTone} />
+      <EmailSendDialog open={emailDialogOpen} title={emailTargetMember ? `Send invoice to ${emailTargetMember.name}` : 'Send invoice'} recipientEmail={emailRecipient} onRecipientEmailChange={setEmailRecipient} onClose={() => { setEmailDialogOpen(false); setEmailTargetMember(null); setEmailTargetProduct(null); setEmailStatus(''); setEmailStatusTone('idle') }} onSend={() => void handleSendDashboardEmail()} isSending={emailStatus === 'Sending invoice email...'} statusMessage={emailStatus} statusTone={emailStatusTone} />
       {message ? <div className="toast">{message}</div> : null}
     </div>
   )
 }
 
 export default App
+
 
 
 
