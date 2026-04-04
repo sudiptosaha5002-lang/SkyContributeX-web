@@ -491,6 +491,17 @@ h1, h2, h3, h4 { letter-spacing: -0.04em; }
   gap: 0.8rem;
 }
 .product-action-button { width: 100%; }
+.product-delete-button {
+  border-color: #c84545;
+  color: #9f1f1f;
+  background: #fff0f0;
+}
+.product-delete-button:hover {
+  background: #ffdede;
+}
+.product-delete-button:disabled {
+  opacity: 0.6;
+}
 .members-block { display: grid; gap: 0.8rem; }
 .product-member-progress {
   height: 6px;
